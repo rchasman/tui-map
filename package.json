@@ -1,0 +1,11 @@
+{
+  "name": "tui-map",
+  "version": "0.1.0",
+  "scripts": {
+    "build": "cargo build --release",
+    "dev": "cargo run",
+    "start": "cargo run --release",
+    "test": "cargo test",
+    "clean": "cargo clean"
+  }
+}
