@@ -1,5 +1,5 @@
 use crate::braille::BrailleCanvas;
-use crate::map::geometry::{draw_circle, draw_line};
+use crate::map::geometry::draw_line;
 use crate::map::projection::Viewport;
 
 /// A geographic line (sequence of lon/lat coordinates)
@@ -167,25 +167,30 @@ impl MapRenderer {
             }
         }
 
-        // Draw cities and collect labels
+        // Collect cities for glyph rendering (not in braille canvas)
         if self.settings.show_cities && viewport.zoom > 2.0 {
             for city in self.get_visible_cities(viewport.zoom) {
                 let (px, py) = viewport.project(city.lon, city.lat);
-                if viewport.is_visible(px, py) {
-                    // Draw marker
-                    let radius = if viewport.zoom > 10.0 {
-                        3
-                    } else if viewport.zoom > 6.0 {
-                        2
-                    } else {
-                        1
-                    };
-                    draw_circle(canvas, px, py, radius);
+                if viewport.is_visible(px, py) && px >= 0 && py >= 0 {
+                    let char_x = (px / 2) as u16;
+                    let char_y = (py / 4) as u16;
 
-                    // Collect label position (convert braille coords to char coords)
-                    if self.settings.show_labels && px >= 0 && py >= 0 {
-                        let char_x = (px / 2) as u16;
-                        let char_y = (py / 4) as u16;
+                    // Choose glyph based on population
+                    let glyph = if city.population >= 10_000_000 {
+                        '◆' // Large metro
+                    } else if city.population >= 1_000_000 {
+                        '●' // Major city
+                    } else if city.population >= 100_000 {
+                        '○' // City
+                    } else {
+                        '·' // Town
+                    };
+
+                    // Add city marker
+                    labels.push((char_x, char_y, glyph.to_string()));
+
+                    // Add label after marker
+                    if self.settings.show_labels {
                         if let Some(label_x) = char_x.checked_add(2) {
                             labels.push((label_x, char_y, city.name.clone()));
                         }

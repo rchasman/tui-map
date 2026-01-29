@@ -87,10 +87,11 @@ impl Widget for MapWidget {
             }
         }
 
-        // Then overlay city labels
+        // Then overlay city markers and labels
+        let marker_style = Style::default().fg(Color::White);
         let label_style = Style::default().fg(Color::Yellow);
 
-        for (lx, ly, name) in &self.labels {
+        for (lx, ly, text) in &self.labels {
             // Check bounds
             if *ly >= self.inner_height || *lx >= self.inner_width {
                 continue;
@@ -99,14 +100,19 @@ impl Widget for MapWidget {
             let x = area.x + *lx;
             let y = area.y + *ly;
 
+            // Check if this is a marker glyph (single char) or a label
+            let is_marker = text.len() == 1 && matches!(text.chars().next(), Some('◆' | '●' | '○' | '·'));
+            let style = if is_marker { marker_style } else { label_style };
+
             // Truncate label to fit
             let max_len = (self.inner_width.saturating_sub(*lx)) as usize;
-            let display_name: String = name.chars().take(max_len.min(12)).collect();
+            let max_display = if is_marker { 1 } else { 12 };
+            let display_text: String = text.chars().take(max_len.min(max_display)).collect();
 
-            for (i, ch) in display_name.chars().enumerate() {
+            for (i, ch) in display_text.chars().enumerate() {
                 let px = x + i as u16;
                 if px < area.x + area.width {
-                    buf[(px, y)].set_char(ch).set_style(label_style);
+                    buf[(px, y)].set_char(ch).set_style(style);
                 }
             }
         }
