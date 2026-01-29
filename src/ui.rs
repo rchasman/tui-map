@@ -113,11 +113,11 @@ impl Widget for MapWidget {
         // 2. Coastlines (Cyan)
         self.render_layer(&self.layers.coastlines, Color::Cyan, area, buf);
 
-        // 3. State borders (Yellow)
-        self.render_layer(&self.layers.states, Color::Yellow, area, buf);
-
-        // 4. Country borders (Cyan - on top)
+        // 3. Country borders (Cyan)
         self.render_layer(&self.layers.borders, Color::Cyan, area, buf);
+
+        // 4. State borders (Yellow - on top so they show over other borders)
+        self.render_layer(&self.layers.states, Color::Yellow, area, buf);
 
         // Then overlay city markers and labels
         let marker_style = Style::default().fg(Color::White);
