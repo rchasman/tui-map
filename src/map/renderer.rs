@@ -180,20 +180,16 @@ impl MapRenderer {
                 })
                 .collect();
 
-            // Sort: capitals first, then megacities, then by population
+            // Sort: megacities first, then by population
             visible_cities.sort_by(|a, b| {
-                match (a.0.is_capital, b.0.is_capital) {
+                match (a.0.is_megacity, b.0.is_megacity) {
                     (true, false) => std::cmp::Ordering::Less,
                     (false, true) => std::cmp::Ordering::Greater,
-                    _ => match (a.0.is_megacity, b.0.is_megacity) {
-                        (true, false) => std::cmp::Ordering::Less,
-                        (false, true) => std::cmp::Ordering::Greater,
-                        _ => b.0.population.cmp(&a.0.population),
-                    }
+                    _ => b.0.population.cmp(&a.0.population),
                 }
             });
 
-            // At low zoom, only show capitals and megacities
+            // At low zoom, only show megacities
             // At higher zoom, show more cities
             let max_cities = Self::max_cities_for_zoom(viewport.zoom);
 
@@ -202,8 +198,8 @@ impl MapRenderer {
 
             let mut city_count = 0usize;
             for (city, char_x, char_y) in visible_cities.into_iter() {
-                // Always show capitals and megacities, otherwise respect max_cities limit
-                if !city.is_capital && !city.is_megacity && city_count >= max_cities {
+                // Always show megacities, otherwise respect max_cities limit
+                if !city.is_megacity && city_count >= max_cities {
                     continue;
                 }
                 city_count += 1;
