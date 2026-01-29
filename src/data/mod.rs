@@ -46,11 +46,22 @@ pub fn load_all_geojson(renderer: &mut MapRenderer, data_dir: &Path) -> Result<(
         }
     }
 
-    // Load county borders
+    // Load county borders (Natural Earth US counties)
     let counties_path = data_dir.join("ne_10m_admin_2_counties.json");
     if counties_path.exists() {
         if let Err(e) = load_counties(renderer, &counties_path) {
             eprintln!("Warning: Failed to load counties: {}", e);
+        }
+    }
+
+    // Load GADM admin level 2 data for other countries
+    let gadm_countries = ["GBR", "CAN", "AUS", "DEU", "FRA", "IND", "CHN", "JPN", "BRA", "MEX"];
+    for country in gadm_countries {
+        let gadm_path = data_dir.join(format!("gadm41_{}_2.json", country));
+        if gadm_path.exists() {
+            if let Err(e) = load_counties(renderer, &gadm_path) {
+                eprintln!("Warning: Failed to load GADM {}: {}", country, e);
+            }
         }
     }
 
