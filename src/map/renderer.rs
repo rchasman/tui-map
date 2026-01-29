@@ -172,10 +172,12 @@ impl MapRenderer {
                     draw_circle(canvas, px, py, radius);
 
                     // Collect label position (convert braille coords to char coords)
-                    if self.settings.show_labels {
+                    if self.settings.show_labels && px >= 0 && py >= 0 {
                         let char_x = (px / 2) as u16;
                         let char_y = (py / 4) as u16;
-                        labels.push((char_x + 2, char_y, city.name.clone()));
+                        if let Some(label_x) = char_x.checked_add(2) {
+                            labels.push((label_x, char_y, city.name.clone()));
+                        }
                     }
                 }
             }
