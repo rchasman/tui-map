@@ -1,4 +1,4 @@
-use crate::map::{MapRenderer, Viewport};
+use crate::map::{Lod, MapRenderer, Viewport};
 
 /// Application state
 pub struct App {
@@ -60,5 +60,14 @@ impl App {
             self.viewport.center_lon.abs(),
             if self.viewport.center_lon >= 0.0 { "E" } else { "W" }
         )
+    }
+
+    /// Get current LOD level as a string
+    pub fn lod_level(&self) -> &'static str {
+        match Lod::from_zoom(self.viewport.zoom) {
+            Lod::Low => "110m",
+            Lod::Medium => "50m",
+            Lod::High => "10m",
+        }
     }
 }

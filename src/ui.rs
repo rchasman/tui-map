@@ -64,10 +64,12 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     let status = Line::from(vec![
         Span::styled(" Zoom: ", Style::default().fg(Color::DarkGray)),
         Span::styled(app.zoom_level(), Style::default().fg(Color::Yellow)),
-        Span::styled(" | Center: ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" (", Style::default().fg(Color::DarkGray)),
+        Span::styled(app.lod_level(), Style::default().fg(Color::Magenta)),
+        Span::styled(") | ", Style::default().fg(Color::DarkGray)),
         Span::styled(app.center_coords(), Style::default().fg(Color::Green)),
         Span::styled(
-            " | hjkl/arrows: pan, +/-: zoom, q: quit ",
+            " | hjkl: pan, +/-: zoom, r: reset, q: quit",
             Style::default().fg(Color::DarkGray),
         ),
     ]);

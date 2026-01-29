@@ -5,6 +5,27 @@ use crate::map::projection::Viewport;
 /// A geographic line (sequence of lon/lat coordinates)
 pub type LineString = Vec<(f64, f64)>;
 
+/// Level of detail for map data
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Lod {
+    Low,    // 110m - world view
+    Medium, // 50m - continental
+    High,   // 10m - regional
+}
+
+impl Lod {
+    /// Select LOD based on zoom level
+    pub fn from_zoom(zoom: f64) -> Self {
+        if zoom < 2.0 {
+            Lod::Low
+        } else if zoom < 8.0 {
+            Lod::Medium
+        } else {
+            Lod::High
+        }
+    }
+}
+
 /// A city marker with position and name
 pub struct City {
     pub lon: f64,
@@ -12,40 +33,63 @@ pub struct City {
     pub name: String,
 }
 
-/// Map renderer that draws geographic features to a braille canvas
+/// Map renderer with multi-resolution coastline data
 pub struct MapRenderer {
-    pub coastlines: Vec<LineString>,
-    pub borders: Vec<LineString>,
+    pub coastlines_low: Vec<LineString>,    // 110m
+    pub coastlines_medium: Vec<LineString>, // 50m
+    pub coastlines_high: Vec<LineString>,   // 10m
     pub cities: Vec<City>,
 }
 
 impl MapRenderer {
     pub fn new() -> Self {
         Self {
-            coastlines: Vec::new(),
-            borders: Vec::new(),
+            coastlines_low: Vec::new(),
+            coastlines_medium: Vec::new(),
+            coastlines_high: Vec::new(),
             cities: Vec::new(),
+        }
+    }
+
+    /// Get coastlines for the given LOD, falling back to lower resolution if unavailable
+    fn get_coastlines(&self, lod: Lod) -> &Vec<LineString> {
+        match lod {
+            Lod::High => {
+                if !self.coastlines_high.is_empty() {
+                    &self.coastlines_high
+                } else if !self.coastlines_medium.is_empty() {
+                    &self.coastlines_medium
+                } else {
+                    &self.coastlines_low
+                }
+            }
+            Lod::Medium => {
+                if !self.coastlines_medium.is_empty() {
+                    &self.coastlines_medium
+                } else {
+                    &self.coastlines_low
+                }
+            }
+            Lod::Low => &self.coastlines_low,
         }
     }
 
     /// Render all map features to the canvas
     pub fn render(&self, canvas: &mut BrailleCanvas, viewport: &Viewport) {
-        // Draw coastlines
-        for line in &self.coastlines {
-            self.draw_linestring(canvas, line, viewport);
-        }
+        let lod = Lod::from_zoom(viewport.zoom);
+        let coastlines = self.get_coastlines(lod);
 
-        // Draw borders (if any)
-        for line in &self.borders {
+        // Draw coastlines
+        for line in coastlines {
             self.draw_linestring(canvas, line, viewport);
         }
 
         // Draw city markers at high zoom
-        if viewport.zoom > 2.0 {
+        if viewport.zoom > 3.0 {
             for city in &self.cities {
                 let (px, py) = viewport.project(city.lon, city.lat);
                 if viewport.is_visible(px, py) {
-                    let radius = if viewport.zoom > 5.0 { 2 } else { 1 };
+                    let radius = if viewport.zoom > 8.0 { 3 } else if viewport.zoom > 5.0 { 2 } else { 1 };
                     draw_circle(canvas, px, py, radius);
                 }
             }
@@ -75,14 +119,13 @@ impl MapRenderer {
         }
     }
 
-    /// Add coastline data
-    pub fn add_coastline(&mut self, line: LineString) {
-        self.coastlines.push(line);
-    }
-
-    /// Add border data
-    pub fn add_border(&mut self, line: LineString) {
-        self.borders.push(line);
+    /// Add coastline data at a specific LOD
+    pub fn add_coastline(&mut self, line: LineString, lod: Lod) {
+        match lod {
+            Lod::Low => self.coastlines_low.push(line),
+            Lod::Medium => self.coastlines_medium.push(line),
+            Lod::High => self.coastlines_high.push(line),
+        }
     }
 
     /// Add a city marker
@@ -92,6 +135,13 @@ impl MapRenderer {
             lat,
             name: name.to_string(),
         });
+    }
+
+    /// Check if any data is loaded
+    pub fn has_data(&self) -> bool {
+        !self.coastlines_low.is_empty()
+            || !self.coastlines_medium.is_empty()
+            || !self.coastlines_high.is_empty()
     }
 }
 

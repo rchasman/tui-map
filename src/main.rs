@@ -29,14 +29,14 @@ fn run(terminal: &mut DefaultTerminal) -> Result<()> {
     let size = terminal.size()?;
     let mut app = App::new(size.width as usize, size.height as usize);
 
-    // Try to load GeoJSON data, fall back to simple world
-    let data_path = Path::new("data/natural-earth.json");
-    if data_path.exists() {
-        if let Err(e) = data::load_geojson(&mut app.map_renderer, data_path) {
-            eprintln!("Warning: Failed to load GeoJSON: {}", e);
-            data::generate_simple_world(&mut app.map_renderer);
-        }
-    } else {
+    // Load all available GeoJSON data at different resolutions
+    let data_dir = Path::new("data");
+    if data_dir.exists() {
+        let _ = data::load_all_geojson(&mut app.map_renderer, data_dir);
+    }
+
+    // Fall back to simple world if no data loaded
+    if !app.map_renderer.has_data() {
         data::generate_simple_world(&mut app.map_renderer);
     }
 
@@ -67,7 +67,10 @@ fn run(terminal: &mut DefaultTerminal) -> Result<()> {
                         KeyCode::Char('r') | KeyCode::Char('0') => {
                             let size = terminal.size()?;
                             app = App::new(size.width as usize, size.height as usize);
-                            data::generate_simple_world(&mut app.map_renderer);
+                            let _ = data::load_all_geojson(&mut app.map_renderer, data_dir);
+                            if !app.map_renderer.has_data() {
+                                data::generate_simple_world(&mut app.map_renderer);
+                            }
                         }
 
                         _ => {}
