@@ -75,7 +75,7 @@ impl Default for DisplaySettings {
             show_coastlines: true,
             show_borders: true,
             show_states: true,
-            show_counties: false,
+            show_counties: true,
             show_cities: true,
             show_labels: true,
             show_population: false,
