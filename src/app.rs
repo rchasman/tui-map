@@ -5,6 +5,8 @@ pub struct App {
     pub viewport: Viewport,
     pub map_renderer: MapRenderer,
     pub should_quit: bool,
+    /// Last mouse position for drag tracking
+    pub last_mouse: Option<(u16, u16)>,
 }
 
 impl App {
@@ -17,6 +19,7 @@ impl App {
             viewport: Viewport::world(pixel_width, pixel_height),
             map_renderer: MapRenderer::new(),
             should_quit: false,
+            last_mouse: None,
         }
     }
 
@@ -69,5 +72,21 @@ impl App {
             Lod::Medium => "50m",
             Lod::High => "10m",
         }
+    }
+
+    /// Handle mouse drag - returns true if we should pan
+    pub fn handle_drag(&mut self, x: u16, y: u16) {
+        if let Some((last_x, last_y)) = self.last_mouse {
+            let dx = last_x as i32 - x as i32;
+            let dy = last_y as i32 - y as i32;
+            // Scale by 2 for more responsive dragging
+            self.pan(dx * 2, dy * 2);
+        }
+        self.last_mouse = Some((x, y));
+    }
+
+    /// Reset drag state when mouse button released
+    pub fn end_drag(&mut self) {
+        self.last_mouse = None;
     }
 }
