@@ -54,13 +54,16 @@ pub fn load_all_geojson(renderer: &mut MapRenderer, data_dir: &Path) -> Result<(
         }
     }
 
-    // Load GADM admin level 2 data for other countries
-    let gadm_countries = ["GBR", "CAN", "AUS", "DEU", "FRA", "IND", "CHN", "JPN", "BRA", "MEX"];
-    for country in gadm_countries {
-        let gadm_path = data_dir.join(format!("gadm41_{}_2.json", country));
-        if gadm_path.exists() {
-            if let Err(e) = load_counties(renderer, &gadm_path) {
-                eprintln!("Warning: Failed to load GADM {}: {}", country, e);
+    // Load all GADM admin level 2 data (global counties/districts)
+    if let Ok(entries) = fs::read_dir(data_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if name.starts_with("gadm41_") && name.ends_with("_2.json") {
+                    if let Err(e) = load_counties(renderer, &path) {
+                        eprintln!("Warning: Failed to load {}: {}", name, e);
+                    }
+                }
             }
         }
     }
