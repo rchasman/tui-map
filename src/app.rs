@@ -14,8 +14,11 @@ pub struct App {
 impl App {
     pub fn new(width: usize, height: usize) -> Self {
         // Braille gives 2x4 resolution per character
-        let pixel_width = width * 2;
-        let pixel_height = height * 4;
+        // Account for border (2 chars horizontal, 2 chars vertical including status bar)
+        let inner_width = width.saturating_sub(2);
+        let inner_height = height.saturating_sub(3); // 2 for border + 1 for status bar
+        let pixel_width = inner_width * 2;
+        let pixel_height = inner_height * 4;
 
         Self {
             viewport: Viewport::world(pixel_width, pixel_height),
@@ -28,8 +31,11 @@ impl App {
 
     /// Update viewport size when terminal resizes
     pub fn resize(&mut self, width: usize, height: usize) {
-        self.viewport.width = width * 2;
-        self.viewport.height = height * 4;
+        // Account for border (2 chars horizontal, 2 chars vertical including status bar)
+        let inner_width = width.saturating_sub(2);
+        let inner_height = height.saturating_sub(3);
+        self.viewport.width = inner_width * 2;
+        self.viewport.height = inner_height * 4;
     }
 
     /// Pan the map
