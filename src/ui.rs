@@ -66,6 +66,7 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
     let map_widget = MapWidget {
         layers,
         cursor_pos,
+        has_states: app.map_renderer.settings.show_states,
         inner_width: inner.width,
         inner_height: inner.height,
     };
@@ -76,6 +77,7 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
 struct MapWidget {
     layers: MapLayers,
     cursor_pos: Option<(u16, u16)>,
+    has_states: bool,
     inner_width: u16,
     inner_height: u16,
 }
@@ -113,8 +115,9 @@ impl Widget for MapWidget {
         // 2. County borders (DarkGray)
         self.render_layer(&self.layers.counties, Color::DarkGray, area, buf);
 
-        // 3. Country borders (Cyan)
-        self.render_layer(&self.layers.borders, Color::Cyan, area, buf);
+        // 3. Country borders (Yellow if states enabled, else Cyan)
+        let border_color = if self.has_states { Color::Yellow } else { Color::Cyan };
+        self.render_layer(&self.layers.borders, border_color, area, buf);
 
         // 4. State borders (Yellow - on top)
         self.render_layer(&self.layers.states, Color::Yellow, area, buf);
