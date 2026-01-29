@@ -105,6 +105,9 @@ fn run(terminal: &mut DefaultTerminal) -> Result<()> {
                             KeyCode::Char('L') => {
                                 app.map_renderer.toggle_labels();
                             }
+                            KeyCode::Char('p') | KeyCode::Char('P') => {
+                                app.map_renderer.toggle_population();
+                            }
 
                             // Reset view
                             KeyCode::Char('r') | KeyCode::Char('0') => {

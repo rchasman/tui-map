@@ -2,6 +2,17 @@ use crate::braille::BrailleCanvas;
 use crate::map::geometry::draw_line;
 use crate::map::projection::Viewport;
 
+/// Format population as compact string (e.g., 1.2M, 500K)
+fn format_population(pop: u64) -> String {
+    if pop >= 1_000_000 {
+        format!("{:.1}M", pop as f64 / 1_000_000.0)
+    } else if pop >= 1_000 {
+        format!("{}K", pop / 1_000)
+    } else {
+        pop.to_string()
+    }
+}
+
 /// A geographic line (sequence of lon/lat coordinates)
 pub type LineString = Vec<(f64, f64)>;
 
@@ -44,6 +55,7 @@ pub struct DisplaySettings {
     pub show_borders: bool,
     pub show_cities: bool,
     pub show_labels: bool,
+    pub show_population: bool,
 }
 
 impl Default for DisplaySettings {
@@ -53,6 +65,7 @@ impl Default for DisplaySettings {
             show_borders: true,
             show_cities: true,
             show_labels: true,
+            show_population: false,
         }
     }
 }
@@ -216,7 +229,12 @@ impl MapRenderer {
                 // Add label after marker
                 if self.settings.show_labels {
                     if let Some(label_x) = char_x.checked_add(2) {
-                        labels.push((label_x, char_y, city.name.clone()));
+                        let label = if self.settings.show_population {
+                            format!("{} ({})", city.name, format_population(city.population))
+                        } else {
+                            city.name.clone()
+                        };
+                        labels.push((label_x, char_y, label));
                     }
                 }
             }
@@ -292,6 +310,11 @@ impl MapRenderer {
     /// Toggle city labels
     pub fn toggle_labels(&mut self) {
         self.settings.show_labels = !self.settings.show_labels;
+    }
+
+    /// Toggle population display
+    pub fn toggle_population(&mut self) {
+        self.settings.show_population = !self.settings.show_population;
     }
 
     /// Toggle borders (country + state/province)

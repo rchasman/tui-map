@@ -141,6 +141,10 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
             if settings.show_labels { "[L]abels " } else { "[l]abels " },
             Style::default().fg(if settings.show_labels { Color::Green } else { Color::DarkGray }),
         ),
+        Span::styled(
+            if settings.show_population { "[P]op " } else { "[p]op " },
+            Style::default().fg(if settings.show_population { Color::Green } else { Color::DarkGray }),
+        ),
         Span::styled("| ", Style::default().fg(Color::DarkGray)),
         Span::styled(app.center_coords(), Style::default().fg(Color::Cyan)),
         Span::styled(
