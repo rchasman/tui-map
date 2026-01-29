@@ -171,8 +171,12 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         Span::styled(") ", Style::default().fg(Color::DarkGray)),
         // Toggle indicators
         Span::styled(
-            if settings.show_borders { "[B]orders " } else { "[b]orders " },
+            if settings.show_borders { "[B]order " } else { "[b]order " },
             Style::default().fg(if settings.show_borders { Color::Green } else { Color::DarkGray }),
+        ),
+        Span::styled(
+            if settings.show_states { "[S]tate " } else { "[s]tate " },
+            Style::default().fg(if settings.show_states { Color::Green } else { Color::DarkGray }),
         ),
         Span::styled(
             if settings.show_counties { "[Y]county " } else { "[y]county " },
