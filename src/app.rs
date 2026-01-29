@@ -44,6 +44,23 @@ impl App {
         self.viewport.zoom_out();
     }
 
+    /// Zoom in towards a screen position (terminal column/row)
+    pub fn zoom_in_at(&mut self, col: u16, row: u16) {
+        // Convert terminal coords to braille pixel coords
+        // Each terminal cell is 2 braille pixels wide, 4 tall
+        // Account for border (1 cell offset)
+        let px = ((col.saturating_sub(1)) as i32) * 2;
+        let py = ((row.saturating_sub(1)) as i32) * 4;
+        self.viewport.zoom_in_at(px, py);
+    }
+
+    /// Zoom out from a screen position (terminal column/row)
+    pub fn zoom_out_at(&mut self, col: u16, row: u16) {
+        let px = ((col.saturating_sub(1)) as i32) * 2;
+        let py = ((row.saturating_sub(1)) as i32) * 4;
+        self.viewport.zoom_out_at(px, py);
+    }
+
     /// Request quit
     pub fn quit(&mut self) {
         self.should_quit = true;

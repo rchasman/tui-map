@@ -58,6 +58,58 @@ impl Viewport {
         self.zoom = (self.zoom / 1.5).max(0.5);
     }
 
+    /// Zoom in towards a specific pixel location
+    pub fn zoom_in_at(&mut self, px: i32, py: i32) {
+        self.zoom_at(px, py, 1.5);
+    }
+
+    /// Zoom out from a specific pixel location
+    pub fn zoom_out_at(&mut self, px: i32, py: i32) {
+        self.zoom_at(px, py, 1.0 / 1.5);
+    }
+
+    /// Zoom by factor towards a specific pixel location
+    fn zoom_at(&mut self, px: i32, py: i32, factor: f64) {
+        // Get the geographic coordinates under the mouse
+        let (lon, lat) = self.unproject(px, py);
+
+        // Apply the zoom
+        let new_zoom = (self.zoom * factor).clamp(0.5, 100.0);
+        self.zoom = new_zoom;
+
+        // Calculate where that point would now project to
+        let (new_px, new_py) = self.project(lon, lat);
+
+        // Calculate the offset needed to bring it back under the mouse
+        let dx = new_px - px;
+        let dy = new_py - py;
+
+        // Pan to compensate
+        self.pan(dx, dy);
+    }
+
+    /// Unproject pixel coordinates back to geographic coordinates (lon, lat)
+    pub fn unproject(&self, px: i32, py: i32) -> (f64, f64) {
+        let scale = self.zoom * self.width as f64;
+
+        // Reverse the projection math
+        let center_x = (self.center_lon + 180.0) / 360.0;
+        let center_lat_rad = self.center_lat * PI / 180.0;
+        let center_y = (1.0 - (center_lat_rad.tan() + 1.0 / center_lat_rad.cos()).ln() / PI) / 2.0;
+
+        let x = (px as f64 - self.width as f64 / 2.0) / scale + center_x;
+        let y = (py as f64 - self.height as f64 / 2.0) / scale + center_y;
+
+        // Convert from Web Mercator normalized coords back to lon/lat
+        let lon = x * 360.0 - 180.0;
+
+        // Inverse Mercator for latitude
+        let lat_rad = (PI * (1.0 - 2.0 * y)).sinh().atan();
+        let lat = lat_rad * 180.0 / PI;
+
+        (lon, lat)
+    }
+
     /// Project a geographic coordinate (lon, lat) to pixel coordinates
     pub fn project(&self, lon: f64, lat: f64) -> (i32, i32) {
         // Web Mercator projection
