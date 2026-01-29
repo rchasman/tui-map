@@ -155,7 +155,7 @@ impl Widget for MapWidget {
         let marker_style = Style::default().fg(Color::White);
         let label_style = Style::default().fg(Color::White);
         let dead_marker_style = Style::default().fg(Color::DarkGray);
-        let dead_label_style = Style::default().fg(Color::DarkGray);
+        let dead_label_style = Style::default().fg(Color::DarkGray).add_modifier(Modifier::CROSSED_OUT);
 
         for (lx, ly, text) in &self.layers.labels {
             // Check bounds

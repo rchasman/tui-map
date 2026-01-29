@@ -181,7 +181,14 @@ impl App {
             if dist < radius_km {
                 // Closer = more casualties (inverse square falloff)
                 let damage_ratio = 1.0 - (dist / radius_km).powi(2);
-                let killed = (city.population as f64 * damage_ratio * 0.8) as u64;
+
+                // Direct hit (within 20% of radius) = total destruction
+                let killed = if dist < radius_km * 0.2 {
+                    city.population // Everyone dies
+                } else {
+                    (city.population as f64 * damage_ratio * 0.9) as u64
+                };
+
                 city.population = city.population.saturating_sub(killed);
                 self.casualties += killed;
             }
