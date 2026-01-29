@@ -16,3 +16,6 @@ Thumbs.db
 
 # Node (for bun scripts)
 node_modules/
+
+# Large data files (download separately)
+data/*.json

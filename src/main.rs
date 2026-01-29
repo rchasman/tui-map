@@ -102,6 +102,9 @@ fn run(terminal: &mut DefaultTerminal) -> Result<()> {
                             KeyCode::Char('c') | KeyCode::Char('C') => {
                                 app.map_renderer.toggle_cities();
                             }
+                            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                                app.map_renderer.toggle_counties();
+                            }
                             KeyCode::Char('L') => {
                                 app.map_renderer.toggle_labels();
                             }

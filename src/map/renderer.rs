@@ -53,6 +53,7 @@ pub struct City {
 pub struct DisplaySettings {
     pub show_coastlines: bool,
     pub show_borders: bool,
+    pub show_counties: bool,
     pub show_cities: bool,
     pub show_labels: bool,
     pub show_population: bool,
@@ -63,6 +64,7 @@ impl Default for DisplaySettings {
         Self {
             show_coastlines: true,
             show_borders: true,
+            show_counties: false,
             show_cities: true,
             show_labels: true,
             show_population: false,
@@ -78,6 +80,7 @@ pub struct MapRenderer {
     pub borders_medium: Vec<LineString>,
     pub borders_high: Vec<LineString>,
     pub states: Vec<LineString>,
+    pub counties: Vec<LineString>,
     pub cities: Vec<City>,
     pub settings: DisplaySettings,
 }
@@ -91,6 +94,7 @@ impl MapRenderer {
             borders_medium: Vec::new(),
             borders_high: Vec::new(),
             states: Vec::new(),
+            counties: Vec::new(),
             cities: Vec::new(),
             settings: DisplaySettings::default(),
         }
@@ -179,6 +183,13 @@ impl MapRenderer {
                 for line in &self.states {
                     self.draw_linestring(canvas, line, viewport);
                 }
+            }
+        }
+
+        // Draw county borders at high zoom
+        if self.settings.show_counties && viewport.zoom >= 8.0 {
+            for line in &self.counties {
+                self.draw_linestring(canvas, line, viewport);
             }
         }
 
@@ -292,6 +303,11 @@ impl MapRenderer {
         self.states.push(line);
     }
 
+    /// Add county border
+    pub fn add_county(&mut self, line: LineString) {
+        self.counties.push(line);
+    }
+
     /// Add a city marker
     pub fn add_city(&mut self, lon: f64, lat: f64, name: &str, population: u64, is_capital: bool, is_megacity: bool) {
         self.cities.push(City {
@@ -324,6 +340,11 @@ impl MapRenderer {
     /// Toggle borders (country + state/province)
     pub fn toggle_borders(&mut self) {
         self.settings.show_borders = !self.settings.show_borders;
+    }
+
+    /// Toggle county borders
+    pub fn toggle_counties(&mut self) {
+        self.settings.show_counties = !self.settings.show_counties;
     }
 
     /// Toggle cities

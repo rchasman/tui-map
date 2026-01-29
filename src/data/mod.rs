@@ -46,6 +46,14 @@ pub fn load_all_geojson(renderer: &mut MapRenderer, data_dir: &Path) -> Result<(
         }
     }
 
+    // Load county borders
+    let counties_path = data_dir.join("ne_10m_admin_2_counties.json");
+    if counties_path.exists() {
+        if let Err(e) = load_counties(renderer, &counties_path) {
+            eprintln!("Warning: Failed to load counties: {}", e);
+        }
+    }
+
     // Load cities
     let cities_path = data_dir.join("ne_10m_cities.json");
     if cities_path.exists() {
@@ -78,6 +86,14 @@ fn load_states(renderer: &mut MapRenderer, path: &Path) -> Result<()> {
     let content = fs::read_to_string(path)?;
     let geojson: GeoJson = content.parse()?;
     process_geojson_lines(&geojson, |line| renderer.add_state(line));
+    Ok(())
+}
+
+/// Load county border GeoJSON data
+fn load_counties(renderer: &mut MapRenderer, path: &Path) -> Result<()> {
+    let content = fs::read_to_string(path)?;
+    let geojson: GeoJson = content.parse()?;
+    process_geojson_lines(&geojson, |line| renderer.add_county(line));
     Ok(())
 }
 
