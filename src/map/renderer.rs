@@ -118,23 +118,21 @@ impl MapRenderer {
         }
     }
 
-    /// Get visible cities based on zoom level (filter by population)
-    fn get_visible_cities(&self, zoom: f64) -> impl Iterator<Item = &City> {
-        let min_pop = if zoom > 15.0 {
-            0 // Show all cities
+    /// Get max number of cities to show based on zoom
+    fn max_cities_for_zoom(zoom: f64) -> usize {
+        if zoom > 20.0 {
+            500
+        } else if zoom > 15.0 {
+            200
         } else if zoom > 10.0 {
-            50_000
+            100
         } else if zoom > 6.0 {
-            200_000
+            50
         } else if zoom > 4.0 {
-            1_000_000
-        } else if zoom > 2.0 {
-            5_000_000
+            25
         } else {
-            10_000_000
-        };
-
-        self.cities.iter().filter(move |c| c.population >= min_pop)
+            10
+        }
     }
 
     /// Render all map features to the canvas
@@ -165,33 +163,50 @@ impl MapRenderer {
             }
         }
 
-        // Collect cities for glyph rendering (not in braille canvas)
+        // Collect cities for glyph rendering (viewport-aware filtering)
         if self.settings.show_cities && viewport.zoom > 2.0 {
-            for city in self.get_visible_cities(viewport.zoom) {
-                let (px, py) = viewport.project(city.lon, city.lat);
-                if viewport.is_visible(px, py) && px >= 0 && py >= 0 {
-                    let char_x = (px / 2) as u16;
-                    let char_y = (py / 4) as u16;
-
-                    // Choose glyph based on population
-                    let glyph = if city.population >= 10_000_000 {
-                        '◆' // Large metro
-                    } else if city.population >= 1_000_000 {
-                        '●' // Major city
-                    } else if city.population >= 100_000 {
-                        '○' // City
+            // First, collect all visible cities with their screen positions
+            let mut visible_cities: Vec<(&City, u16, u16)> = self.cities
+                .iter()
+                .filter_map(|city| {
+                    let (px, py) = viewport.project(city.lon, city.lat);
+                    if viewport.is_visible(px, py) && px >= 0 && py >= 0 {
+                        Some((city, (px / 2) as u16, (py / 4) as u16))
                     } else {
-                        '·' // Town
-                    };
+                        None
+                    }
+                })
+                .collect();
 
-                    // Add city marker
-                    labels.push((char_x, char_y, glyph.to_string()));
+            // Sort by population descending (largest cities first)
+            visible_cities.sort_by(|a, b| b.0.population.cmp(&a.0.population));
 
-                    // Add label after marker
-                    if self.settings.show_labels {
-                        if let Some(label_x) = char_x.checked_add(2) {
-                            labels.push((label_x, char_y, city.name.clone()));
-                        }
+            // Take top N based on zoom level
+            let max_cities = Self::max_cities_for_zoom(viewport.zoom);
+
+            // Find max population in visible set for relative sizing
+            let max_pop = visible_cities.first().map(|(c, _, _)| c.population).unwrap_or(1);
+
+            for (city, char_x, char_y) in visible_cities.into_iter().take(max_cities) {
+                // Choose glyph based on relative population (normalized to visible cities)
+                let ratio = city.population as f64 / max_pop as f64;
+                let glyph = if ratio > 0.5 || city.population >= 5_000_000 {
+                    '◆' // Top tier in view or major metro
+                } else if ratio > 0.2 || city.population >= 500_000 {
+                    '●' // Upper tier
+                } else if ratio > 0.05 || city.population >= 50_000 {
+                    '○' // Mid tier
+                } else {
+                    '·' // Small
+                };
+
+                // Add city marker
+                labels.push((char_x, char_y, glyph.to_string()));
+
+                // Add label after marker
+                if self.settings.show_labels {
+                    if let Some(label_x) = char_x.checked_add(2) {
+                        labels.push((label_x, char_y, city.name.clone()));
                     }
                 }
             }
