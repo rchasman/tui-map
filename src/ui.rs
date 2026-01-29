@@ -101,7 +101,7 @@ impl Widget for MapWidget {
             let y = area.y + *ly;
 
             // Check if this is a marker glyph (single char) or a label
-            let is_marker = text.len() == 1 && matches!(text.chars().next(), Some('◆' | '●' | '○' | '·'));
+            let is_marker = text.len() <= 3 && matches!(text.chars().next(), Some('⚜' | '★' | '◆' | '■' | '●' | '○' | '◦' | '·'));
             let style = if is_marker { marker_style } else { label_style };
 
             // Truncate label to fit

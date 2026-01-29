@@ -26,13 +26,15 @@ impl Lod {
     }
 }
 
-/// A city marker with position, name, and population
+/// A city marker with position, name, and metadata
 #[derive(Clone)]
 pub struct City {
     pub lon: f64,
     pub lat: f64,
     pub name: String,
     pub population: u64,
+    pub is_capital: bool,
+    pub is_megacity: bool,
 }
 
 /// Display settings for map layers
@@ -188,16 +190,24 @@ impl MapRenderer {
             let max_pop = visible_cities.first().map(|(c, _, _)| c.population).unwrap_or(1);
 
             for (city, char_x, char_y) in visible_cities.into_iter().take(max_cities) {
-                // Choose glyph based on relative population (normalized to visible cities)
+                // Choose glyph based on city type and relative population
                 let ratio = city.population as f64 / max_pop as f64;
-                let glyph = if ratio > 0.5 || city.population >= 5_000_000 {
-                    '◆' // Top tier in view or major metro
+                let glyph = if city.is_capital {
+                    '⚜' // National capital - fleur-de-lis
+                } else if city.is_megacity || city.population >= 10_000_000 {
+                    '★' // Megacity (10M+)
+                } else if ratio > 0.6 || city.population >= 5_000_000 {
+                    '◆' // Major metro (5M+)
+                } else if ratio > 0.4 || city.population >= 2_000_000 {
+                    '■' // Large city (2M+)
                 } else if ratio > 0.2 || city.population >= 500_000 {
-                    '●' // Upper tier
-                } else if ratio > 0.05 || city.population >= 50_000 {
-                    '○' // Mid tier
+                    '●' // City (500K+)
+                } else if ratio > 0.1 || city.population >= 100_000 {
+                    '○' // Small city (100K+)
+                } else if city.population >= 20_000 {
+                    '◦' // Town (20K+)
                 } else {
-                    '·' // Small
+                    '·' // Village
                 };
 
                 // Add city marker
@@ -261,12 +271,14 @@ impl MapRenderer {
     }
 
     /// Add a city marker
-    pub fn add_city(&mut self, lon: f64, lat: f64, name: &str, population: u64) {
+    pub fn add_city(&mut self, lon: f64, lat: f64, name: &str, population: u64, is_capital: bool, is_megacity: bool) {
         self.cities.push(City {
             lon,
             lat,
             name: name.to_string(),
             population,
+            is_capital,
+            is_megacity,
         });
     }
 

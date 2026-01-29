@@ -108,11 +108,25 @@ fn load_cities(renderer: &mut MapRenderer, path: &Path) -> Result<()> {
                 .map(|v| v as u64)
                 .unwrap_or(0);
 
+            // Check if national capital (adm0cap = 1)
+            let is_capital = props
+                .and_then(|p| p.get("adm0cap"))
+                .and_then(|v| v.as_f64())
+                .map(|v| v >= 1.0)
+                .unwrap_or(false);
+
+            // Check if megacity
+            let is_megacity = props
+                .and_then(|p| p.get("megacity"))
+                .and_then(|v| v.as_f64())
+                .map(|v| v >= 1.0)
+                .unwrap_or(false);
+
             // Get coordinates
             if let Some(geometry) = feature.geometry {
                 if let Value::Point(coords) = geometry.value {
                     if coords.len() >= 2 {
-                        renderer.add_city(coords[0], coords[1], &name, population);
+                        renderer.add_city(coords[0], coords[1], &name, population, is_capital, is_megacity);
                     }
                 }
             }
@@ -271,15 +285,18 @@ pub fn generate_simple_world(renderer: &mut MapRenderer) {
         Lod::Low,
     );
 
-    // Major cities with populations
-    renderer.add_city(-74.0, 40.7, "New York", 18_800_000);
-    renderer.add_city(-0.1, 51.5, "London", 9_000_000);
-    renderer.add_city(2.3, 48.9, "Paris", 11_000_000);
-    renderer.add_city(139.7, 35.7, "Tokyo", 37_400_000);
-    renderer.add_city(151.2, -33.9, "Sydney", 5_300_000);
-    renderer.add_city(-43.2, -22.9, "Rio", 13_500_000);
-    renderer.add_city(37.6, 55.8, "Moscow", 12_500_000);
-    renderer.add_city(116.4, 39.9, "Beijing", 21_500_000);
-    renderer.add_city(77.2, 28.6, "Delhi", 32_900_000);
-    renderer.add_city(-118.2, 34.0, "Los Angeles", 12_400_000);
+    // Major cities with populations (is_capital, is_megacity)
+    renderer.add_city(-74.0, 40.7, "New York", 18_800_000, false, true);
+    renderer.add_city(-0.1, 51.5, "London", 9_000_000, true, true);
+    renderer.add_city(2.3, 48.9, "Paris", 11_000_000, true, true);
+    renderer.add_city(139.7, 35.7, "Tokyo", 37_400_000, true, true);
+    renderer.add_city(151.2, -33.9, "Sydney", 5_300_000, false, false);
+    renderer.add_city(-43.2, -22.9, "Rio", 13_500_000, false, true);
+    renderer.add_city(37.6, 55.8, "Moscow", 12_500_000, true, true);
+    renderer.add_city(116.4, 39.9, "Beijing", 21_500_000, true, true);
+    renderer.add_city(77.2, 28.6, "Delhi", 32_900_000, true, true);
+    renderer.add_city(-118.2, 34.0, "Los Angeles", 12_400_000, false, true);
+    renderer.add_city(-77.0, 38.9, "Washington", 5_300_000, true, false);
+    renderer.add_city(-99.1, 19.4, "Mexico City", 21_800_000, true, true);
+    renderer.add_city(-58.4, -34.6, "Buenos Aires", 15_000_000, true, true);
 }
