@@ -104,9 +104,9 @@ impl Widget for MapWidget {
             let is_marker = text.len() <= 3 && matches!(text.chars().next(), Some('⚜' | '★' | '◆' | '■' | '●' | '○' | '◦' | '·'));
             let style = if is_marker { marker_style } else { label_style };
 
-            // Truncate label to fit
+            // Truncate label to fit screen, allow longer labels for population
             let max_len = (self.inner_width.saturating_sub(*lx)) as usize;
-            let max_display = if is_marker { 1 } else { 12 };
+            let max_display = if is_marker { 1 } else { 24 };
             let display_text: String = text.chars().take(max_len.min(max_display)).collect();
 
             for (i, ch) in display_text.chars().enumerate() {
