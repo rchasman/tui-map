@@ -180,29 +180,16 @@ impl MapRenderer {
                 })
                 .collect();
 
-            // Sort: megacities first, then by population
-            visible_cities.sort_by(|a, b| {
-                match (a.0.is_megacity, b.0.is_megacity) {
-                    (true, false) => std::cmp::Ordering::Less,
-                    (false, true) => std::cmp::Ordering::Greater,
-                    _ => b.0.population.cmp(&a.0.population),
-                }
-            });
+            // Sort by population descending
+            visible_cities.sort_by(|a, b| b.0.population.cmp(&a.0.population));
 
-            // At low zoom, only show megacities
-            // At higher zoom, show more cities
+            // Take top N based on zoom level
             let max_cities = Self::max_cities_for_zoom(viewport.zoom);
 
             // Find max population in visible set for relative sizing
             let max_pop = visible_cities.first().map(|(c, _, _)| c.population).unwrap_or(1);
 
-            let mut city_count = 0usize;
-            for (city, char_x, char_y) in visible_cities.into_iter() {
-                // Always show megacities, otherwise respect max_cities limit
-                if !city.is_megacity && city_count >= max_cities {
-                    continue;
-                }
-                city_count += 1;
+            for (city, char_x, char_y) in visible_cities.into_iter().take(max_cities) {
                 // Choose glyph based on city type and relative population
                 let ratio = city.population as f64 / max_pop as f64;
                 let glyph = if city.is_capital {
