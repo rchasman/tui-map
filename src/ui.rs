@@ -68,7 +68,11 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
         let cx = (px / 2) as u16;
         let cy = (py / 4) as u16;
         if cx < inner.width && cy < inner.height {
-            Some(ExplosionRender { x: cx, y: cy, frame: exp.frame })
+            // Convert radius_km to screen chars (rough: 1 degree ~= 111km at equator)
+            let degrees = exp.radius_km / 111.0;
+            let pixels = (degrees * viewport.zoom * inner.width as f64 / 360.0) as u16;
+            let radius = (pixels / 2).max(3).min(15); // Clamp to reasonable range
+            Some(ExplosionRender { x: cx, y: cy, frame: exp.frame, radius })
         } else {
             None
         }
@@ -92,6 +96,7 @@ struct ExplosionRender {
     x: u16,
     y: u16,
     frame: u8,
+    radius: u16, // Visual radius in chars
 }
 
 /// Custom widget that renders braille map with text labels overlaid
@@ -181,8 +186,10 @@ impl Widget for MapWidget {
             let x = area.x + exp.x;
             let y = area.y + exp.y;
 
-            // Explosion grows then fades
-            let radius = (exp.frame as i16 / 2).min(5);
+            // Explosion expands based on frame, up to actual blast radius
+            let progress = (exp.frame as f32 / 15.0).min(1.0);
+            let current_radius = ((exp.radius as f32 * progress) as i16).max(1);
+
             let (ch, color) = if exp.frame < 5 {
                 ('*', Color::White)
             } else if exp.frame < 10 {
@@ -192,10 +199,10 @@ impl Widget for MapWidget {
             };
 
             // Draw expanding ring
-            for dy in -radius..=radius {
-                for dx in -radius..=radius {
+            for dy in -current_radius..=current_radius {
+                for dx in -current_radius..=current_radius {
                     let dist = (dx.abs() + dy.abs()) as i16;
-                    if dist <= radius && dist >= radius - 1 {
+                    if dist <= current_radius && dist >= current_radius - 1 {
                         let px = (x as i16 + dx) as u16;
                         let py = (y as i16 + dy) as u16;
                         if px >= area.x && px < area.x + area.width &&
