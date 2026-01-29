@@ -260,8 +260,20 @@ impl MapRenderer {
             let max_pop = visible_cities.first().map(|(c, _, _)| c.population).unwrap_or(1);
 
             for (city, char_x, char_y) in visible_cities.into_iter().take(max_cities) {
+                // Dead city - skull marker
+                if city.population == 0 {
+                    labels.push((char_x, char_y, "☠".to_string()));
+                    if self.settings.show_labels {
+                        if let Some(label_x) = char_x.checked_add(2) {
+                            // Prefix with ~ to indicate dead city for strikethrough
+                            labels.push((label_x, char_y, format!("~{}", city.name)));
+                        }
+                    }
+                    continue;
+                }
+
                 // Choose glyph based on city type and relative population
-                let ratio = city.population as f64 / max_pop as f64;
+                let ratio = city.population as f64 / max_pop.max(1) as f64;
                 let glyph = if city.is_capital {
                     '⚜' // National capital - fleur-de-lis
                 } else if city.is_megacity || city.population >= 10_000_000 {

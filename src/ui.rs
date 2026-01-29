@@ -154,6 +154,8 @@ impl Widget for MapWidget {
         // Then overlay city markers and labels
         let marker_style = Style::default().fg(Color::White);
         let label_style = Style::default().fg(Color::White);
+        let dead_marker_style = Style::default().fg(Color::DarkGray);
+        let dead_label_style = Style::default().fg(Color::DarkGray);
 
         for (lx, ly, text) in &self.layers.labels {
             // Check bounds
@@ -164,14 +166,23 @@ impl Widget for MapWidget {
             let x = area.x + *lx;
             let y = area.y + *ly;
 
+            // Check for dead city (~ prefix) or skull marker
+            let is_dead = text.starts_with('~') || text.starts_with('☠');
+            let display_text_raw = if text.starts_with('~') { &text[1..] } else { text.as_str() };
+
             // Check if this is a marker glyph (single char) or a label
-            let is_marker = text.len() <= 3 && matches!(text.chars().next(), Some('⚜' | '★' | '◆' | '■' | '●' | '○' | '◦' | '·'));
-            let style = if is_marker { marker_style } else { label_style };
+            let is_marker = text.len() <= 3 && matches!(text.chars().next(), Some('⚜' | '★' | '◆' | '■' | '●' | '○' | '◦' | '·' | '☠'));
+            let style = match (is_marker, is_dead) {
+                (true, true) => dead_marker_style,
+                (true, false) => marker_style,
+                (false, true) => dead_label_style,
+                (false, false) => label_style,
+            };
 
             // Truncate label to fit screen, allow longer labels for population
             let max_len = (self.inner_width.saturating_sub(*lx)) as usize;
             let max_display = if is_marker { 1 } else { 24 };
-            let display_text: String = text.chars().take(max_len.min(max_display)).collect();
+            let display_text: String = display_text_raw.chars().take(max_len.min(max_display)).collect();
 
             for (i, ch) in display_text.chars().enumerate() {
                 let px = x + i as u16;
@@ -188,34 +199,36 @@ impl Widget for MapWidget {
 
             // Explosion expands based on frame, up to actual blast radius
             let progress = (exp.frame as f32 / 15.0).min(1.0);
-            let current_radius = ((exp.radius as f32 * progress) as i16).max(1);
+            let max_r = exp.radius as f32 * progress;
 
-            let (ch, color) = if exp.frame < 5 {
-                ('*', Color::White)
-            } else if exp.frame < 10 {
-                ('☢', Color::Yellow)
-            } else {
-                ('░', Color::Red)
-            };
+            // Draw mushroom cloud shape - wider at top, stem below
+            for dy in -(exp.radius as i16 + 2)..=(exp.radius as i16) {
+                for dx in -(exp.radius as i16)..=(exp.radius as i16) {
+                    // Euclidean distance for circular shape
+                    let dist = ((dx * dx + dy * dy) as f32).sqrt();
 
-            // Draw expanding ring
-            for dy in -current_radius..=current_radius {
-                for dx in -current_radius..=current_radius {
-                    let dist = (dx.abs() + dy.abs()) as i16;
-                    if dist <= current_radius && dist >= current_radius - 1 {
+                    // Mushroom cap (top half, wider)
+                    let in_cap = dy <= 0 && dist <= max_r;
+                    // Stem (bottom, narrower)
+                    let in_stem = dy > 0 && dy <= (max_r * 0.6) as i16 && dx.abs() <= (max_r * 0.3) as i16;
+
+                    if in_cap || in_stem {
                         let px = (x as i16 + dx) as u16;
                         let py = (y as i16 + dy) as u16;
                         if px >= area.x && px < area.x + area.width &&
                            py >= area.y && py < area.y + area.height {
+                            // Color based on distance from center and frame
+                            let (ch, color) = if dist < max_r * 0.3 {
+                                if exp.frame < 8 { ('*', Color::White) } else { ('☢', Color::Red) }
+                            } else if dist < max_r * 0.6 {
+                                ('█', Color::Yellow)
+                            } else {
+                                ('░', Color::Red)
+                            };
                             buf[(px, py)].set_char(ch).set_fg(color);
                         }
                     }
                 }
-            }
-
-            // Draw center
-            if x < area.x + area.width && y < area.y + area.height {
-                buf[(x, y)].set_char('☢').set_fg(Color::Red);
             }
         }
 
