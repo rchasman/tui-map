@@ -96,8 +96,8 @@ impl App {
         if let Some((last_x, last_y)) = self.last_mouse {
             let dx = last_x as i32 - x as i32;
             let dy = last_y as i32 - y as i32;
-            // Scale by 2 for more responsive dragging
-            self.pan(dx * 2, dy * 2);
+            // Scale by 5 for responsive dragging
+            self.pan(dx * 5, dy * 5);
         }
         self.last_mouse = Some((x, y));
     }
