@@ -36,10 +36,9 @@ fn main() -> Result<()> {
 /// Handle mouse events for panning and zooming
 fn handle_mouse(app: &mut App, mouse: MouseEvent) {
     match mouse.kind {
-        // Scroll wheel for zooming
-        MouseEventKind::ScrollUp => app.zoom_in(),
-        MouseEventKind::ScrollDown => app.zoom_out(),
-        // Horizontal scroll for panning (trackpad two-finger swipe)
+        // Scroll to pan (trackpad two-finger swipe)
+        MouseEventKind::ScrollUp => app.pan(0, -8),
+        MouseEventKind::ScrollDown => app.pan(0, 8),
         MouseEventKind::ScrollLeft => app.pan(-15, 0),
         MouseEventKind::ScrollRight => app.pan(15, 0),
         // Click and drag to pan
