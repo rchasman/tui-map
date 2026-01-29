@@ -9,6 +9,14 @@ pub struct Explosion {
     pub radius_km: f64,
 }
 
+/// A spreading fire
+#[derive(Clone)]
+pub struct Fire {
+    pub lon: f64,
+    pub lat: f64,
+    pub intensity: u8, // 0-255, decays over time
+}
+
 /// Application state
 pub struct App {
     pub viewport: Viewport,
@@ -20,6 +28,8 @@ pub struct App {
     pub mouse_pos: Option<(u16, u16)>,
     /// Active explosions
     pub explosions: Vec<Explosion>,
+    /// Active fires
+    pub fires: Vec<Fire>,
     /// Total casualties
     pub casualties: u64,
 }
@@ -40,6 +50,7 @@ impl App {
             last_mouse: None,
             mouse_pos: None,
             explosions: Vec::new(),
+            fires: Vec::new(),
             casualties: 0,
         }
     }
@@ -160,8 +171,9 @@ impl App {
         let py = ((row.saturating_sub(1)) as i32) * 4;
         let (lon, lat) = self.viewport.unproject(px, py);
 
-        // Blast radius ~50km (scales with zoom for visual effect)
-        let radius_km = 50.0 + 100.0 / self.viewport.zoom;
+        // Blast radius scales inversely with zoom - bigger nukes when zoomed out
+        // Zoomed out (1x) = ~500km radius (strategic), Zoomed in (20x+) = ~25km (tactical)
+        let radius_km = 25.0 + 500.0 / self.viewport.zoom;
 
         self.explosions.push(Explosion {
             lon,
@@ -169,6 +181,21 @@ impl App {
             frame: 0,
             radius_km,
         });
+
+        // Spawn fires around the blast perimeter
+        let num_fires = (radius_km / 10.0) as usize + 5;
+        for i in 0..num_fires {
+            let angle = (i as f64 / num_fires as f64) * std::f64::consts::TAU;
+            let dist = radius_km * (0.5 + rand_simple(i as u64) * 0.8);
+            // Convert km to degrees (rough approximation)
+            let dlat = (dist * angle.sin()) / 111.0;
+            let dlon = (dist * angle.cos()) / (111.0 * lat.to_radians().cos().max(0.1));
+            self.fires.push(Fire {
+                lon: lon + dlon,
+                lat: lat + dlat,
+                intensity: 200 + (rand_simple(i as u64 + 1000) * 55.0) as u8,
+            });
+        }
 
         // Calculate casualties
         self.apply_blast_damage(lon, lat, radius_km);
@@ -201,7 +228,33 @@ impl App {
             exp.frame += 1;
             exp.frame < 20 // Animation lasts 20 frames
         });
-        !self.explosions.is_empty()
+
+        // Update fires - decay and occasionally spread
+        let mut new_fires = Vec::new();
+        self.fires.retain_mut(|fire| {
+            // Decay intensity
+            fire.intensity = fire.intensity.saturating_sub(1);
+
+            // Occasionally spread to nearby area
+            if fire.intensity > 100 && rand_simple((fire.lon * 1000.0) as u64 + fire.intensity as u64) > 0.95 {
+                let spread_dist = 0.1; // degrees
+                let angle = rand_simple((fire.lat * 1000.0) as u64) * std::f64::consts::TAU;
+                new_fires.push(Fire {
+                    lon: fire.lon + spread_dist * angle.cos(),
+                    lat: fire.lat + spread_dist * angle.sin(),
+                    intensity: fire.intensity.saturating_sub(20),
+                });
+            }
+
+            fire.intensity > 0
+        });
+
+        // Add spread fires (limit total)
+        if self.fires.len() < 500 {
+            self.fires.extend(new_fires);
+        }
+
+        !self.explosions.is_empty() || !self.fires.is_empty()
     }
 }
 
@@ -216,4 +269,10 @@ fn haversine_km(lon1: f64, lat1: f64, lon2: f64, lat2: f64) -> f64 {
     let a = (dlat / 2.0).sin().powi(2) + lat1.cos() * lat2.cos() * (dlon / 2.0).sin().powi(2);
     let c = 2.0 * a.sqrt().asin();
     r * c
+}
+
+/// Simple deterministic random (hash-based)
+fn rand_simple(seed: u64) -> f64 {
+    let x = seed.wrapping_mul(0x5DEECE66D).wrapping_add(0xB);
+    ((x >> 16) & 0xFFFF) as f64 / 65536.0
 }

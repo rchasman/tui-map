@@ -78,11 +78,24 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
         }
     }).collect();
 
+    // Convert fires to screen coordinates
+    let fires: Vec<FireRender> = app.fires.iter().filter_map(|fire| {
+        let (px, py) = viewport.project(fire.lon, fire.lat);
+        let cx = (px / 2) as u16;
+        let cy = (py / 4) as u16;
+        if cx < inner.width && cy < inner.height && px >= 0 && py >= 0 {
+            Some(FireRender { x: cx, y: cy, intensity: fire.intensity })
+        } else {
+            None
+        }
+    }).collect();
+
     // Render braille map
     let map_widget = MapWidget {
         layers,
         cursor_pos,
         explosions,
+        fires,
         has_states: app.map_renderer.settings.show_states,
         zoom: viewport.zoom,
         inner_width: inner.width,
@@ -99,11 +112,19 @@ struct ExplosionRender {
     radius: u16, // Visual radius in chars
 }
 
+/// A fire to render
+struct FireRender {
+    x: u16,
+    y: u16,
+    intensity: u8,
+}
+
 /// Custom widget that renders braille map with text labels overlaid
 struct MapWidget {
     layers: MapLayers,
     cursor_pos: Option<(u16, u16)>,
     explosions: Vec<ExplosionRender>,
+    fires: Vec<FireRender>,
     has_states: bool,
     zoom: f64,
     inner_width: u16,
@@ -189,6 +210,17 @@ impl Widget for MapWidget {
                 if px < area.x + area.width {
                     buf[(px, y)].set_char(ch).set_style(style);
                 }
+            }
+        }
+
+        // Render fires
+        for fire in &self.fires {
+            let x = area.x + fire.x;
+            let y = area.y + fire.y;
+            if x < area.x + area.width && y < area.y + area.height {
+                let ch = if fire.intensity > 150 { '▓' } else if fire.intensity > 75 { '▒' } else { '░' };
+                let color = if fire.intensity > 100 { Color::Yellow } else { Color::Red };
+                buf[(x, y)].set_char(ch).set_fg(color);
             }
         }
 
