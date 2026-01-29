@@ -40,6 +40,7 @@ pub struct City {
 pub struct DisplaySettings {
     pub show_coastlines: bool,
     pub show_borders: bool,
+    pub show_states: bool,
     pub show_cities: bool,
     pub show_labels: bool,
 }
@@ -49,6 +50,7 @@ impl Default for DisplaySettings {
         Self {
             show_coastlines: true,
             show_borders: true,
+            show_states: true,
             show_cities: true,
             show_labels: true,
         }
@@ -62,6 +64,7 @@ pub struct MapRenderer {
     pub coastlines_high: Vec<LineString>,
     pub borders_medium: Vec<LineString>,
     pub borders_high: Vec<LineString>,
+    pub states: Vec<LineString>,
     pub cities: Vec<City>,
     pub settings: DisplaySettings,
 }
@@ -74,6 +77,7 @@ impl MapRenderer {
             coastlines_high: Vec::new(),
             borders_medium: Vec::new(),
             borders_high: Vec::new(),
+            states: Vec::new(),
             cities: Vec::new(),
             settings: DisplaySettings::default(),
         }
@@ -156,6 +160,13 @@ impl MapRenderer {
             }
         }
 
+        // Draw state/province borders (only at high zoom)
+        if self.settings.show_states && viewport.zoom >= 4.0 {
+            for line in &self.states {
+                self.draw_linestring(canvas, line, viewport);
+            }
+        }
+
         // Draw cities and collect labels
         if self.settings.show_cities && viewport.zoom > 2.0 {
             for city in self.get_visible_cities(viewport.zoom) {
@@ -226,6 +237,11 @@ impl MapRenderer {
         }
     }
 
+    /// Add state/province border
+    pub fn add_state(&mut self, line: LineString) {
+        self.states.push(line);
+    }
+
     /// Add a city marker
     pub fn add_city(&mut self, lon: f64, lat: f64, name: &str, population: u64) {
         self.cities.push(City {
@@ -251,6 +267,11 @@ impl MapRenderer {
     /// Toggle borders
     pub fn toggle_borders(&mut self) {
         self.settings.show_borders = !self.settings.show_borders;
+    }
+
+    /// Toggle state/province borders
+    pub fn toggle_states(&mut self) {
+        self.settings.show_states = !self.settings.show_states;
     }
 
     /// Toggle cities

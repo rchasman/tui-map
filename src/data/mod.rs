@@ -38,6 +38,14 @@ pub fn load_all_geojson(renderer: &mut MapRenderer, data_dir: &Path) -> Result<(
         }
     }
 
+    // Load state/province borders
+    let states_path = data_dir.join("ne_10m_states.json");
+    if states_path.exists() {
+        if let Err(e) = load_states(renderer, &states_path) {
+            eprintln!("Warning: Failed to load states: {}", e);
+        }
+    }
+
     // Load cities
     let cities_path = data_dir.join("ne_10m_cities.json");
     if cities_path.exists() {
@@ -62,6 +70,14 @@ fn load_borders(renderer: &mut MapRenderer, path: &Path, lod: Lod) -> Result<()>
     let content = fs::read_to_string(path)?;
     let geojson: GeoJson = content.parse()?;
     process_geojson_lines(&geojson, |line| renderer.add_border(line, lod));
+    Ok(())
+}
+
+/// Load state/province border GeoJSON data
+fn load_states(renderer: &mut MapRenderer, path: &Path) -> Result<()> {
+    let content = fs::read_to_string(path)?;
+    let geojson: GeoJson = content.parse()?;
+    process_geojson_lines(&geojson, |line| renderer.add_state(line));
     Ok(())
 }
 
