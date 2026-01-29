@@ -63,6 +63,17 @@ fn run(terminal: &mut DefaultTerminal) -> Result<()> {
                         KeyCode::Char('+') | KeyCode::Char('=') => app.zoom_in(),
                         KeyCode::Char('-') | KeyCode::Char('_') => app.zoom_out(),
 
+                        // Layer toggles
+                        KeyCode::Char('b') | KeyCode::Char('B') => {
+                            app.map_renderer.toggle_borders();
+                        }
+                        KeyCode::Char('c') | KeyCode::Char('C') => {
+                            app.map_renderer.toggle_cities();
+                        }
+                        KeyCode::Char('L') => {
+                            app.map_renderer.toggle_labels();
+                        }
+
                         // Reset view
                         KeyCode::Char('r') | KeyCode::Char('0') => {
                             let size = terminal.size()?;

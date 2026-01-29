@@ -6,82 +6,162 @@ use std::path::Path;
 
 /// Load all available Natural Earth GeoJSON data into the map renderer
 pub fn load_all_geojson(renderer: &mut MapRenderer, data_dir: &Path) -> Result<()> {
-    // Load each resolution if available
-    let files = [
+    // Load coastlines at each resolution
+    let coastline_files = [
         ("ne_110m_coastline.json", Lod::Low),
-        ("natural-earth.json", Lod::Medium), // 50m is the default name
+        ("natural-earth.json", Lod::Medium),
         ("ne_50m_coastline.json", Lod::Medium),
         ("ne_10m_coastline.json", Lod::High),
     ];
 
-    for (filename, lod) in files {
+    for (filename, lod) in coastline_files {
         let path = data_dir.join(filename);
         if path.exists() {
-            if let Err(e) = load_geojson_with_lod(renderer, &path, lod) {
+            if let Err(e) = load_coastlines(renderer, &path, lod) {
                 eprintln!("Warning: Failed to load {}: {}", filename, e);
             }
         }
     }
 
-    Ok(())
-}
+    // Load borders
+    let border_files = [
+        ("ne_50m_borders.json", Lod::Medium),
+        ("ne_10m_borders.json", Lod::High),
+    ];
 
-/// Load Natural Earth GeoJSON data at a specific LOD
-fn load_geojson_with_lod(renderer: &mut MapRenderer, path: &Path, lod: Lod) -> Result<()> {
-    let content = fs::read_to_string(path)?;
-    let geojson: GeoJson = content.parse()?;
-
-    match geojson {
-        GeoJson::FeatureCollection(fc) => {
-            for feature in fc.features {
-                if let Some(geometry) = feature.geometry {
-                    process_geometry(renderer, geometry, lod);
-                }
+    for (filename, lod) in border_files {
+        let path = data_dir.join(filename);
+        if path.exists() {
+            if let Err(e) = load_borders(renderer, &path, lod) {
+                eprintln!("Warning: Failed to load {}: {}", filename, e);
             }
         }
-        GeoJson::Feature(f) => {
-            if let Some(geometry) = f.geometry {
-                process_geometry(renderer, geometry, lod);
-            }
-        }
-        GeoJson::Geometry(geometry) => {
-            process_geometry(renderer, geometry, lod);
+    }
+
+    // Load cities
+    let cities_path = data_dir.join("ne_10m_cities.json");
+    if cities_path.exists() {
+        if let Err(e) = load_cities(renderer, &cities_path) {
+            eprintln!("Warning: Failed to load cities: {}", e);
         }
     }
 
     Ok(())
 }
 
-fn process_geometry(renderer: &mut MapRenderer, geometry: Geometry, lod: Lod) {
-    match geometry.value {
+/// Load coastline GeoJSON data
+fn load_coastlines(renderer: &mut MapRenderer, path: &Path, lod: Lod) -> Result<()> {
+    let content = fs::read_to_string(path)?;
+    let geojson: GeoJson = content.parse()?;
+    process_geojson_lines(&geojson, |line| renderer.add_coastline(line, lod));
+    Ok(())
+}
+
+/// Load border GeoJSON data
+fn load_borders(renderer: &mut MapRenderer, path: &Path, lod: Lod) -> Result<()> {
+    let content = fs::read_to_string(path)?;
+    let geojson: GeoJson = content.parse()?;
+    process_geojson_lines(&geojson, |line| renderer.add_border(line, lod));
+    Ok(())
+}
+
+/// Load cities from GeoJSON
+fn load_cities(renderer: &mut MapRenderer, path: &Path) -> Result<()> {
+    let content = fs::read_to_string(path)?;
+    let geojson: GeoJson = content.parse()?;
+
+    if let GeoJson::FeatureCollection(fc) = geojson {
+        for feature in fc.features {
+            let props = feature.properties.as_ref();
+
+            // Get city name
+            let name = props
+                .and_then(|p| p.get("name"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("Unknown")
+                .to_string();
+
+            // Get population (try multiple fields)
+            let population = props
+                .and_then(|p| {
+                    p.get("pop_max")
+                        .or_else(|| p.get("pop_min"))
+                        .or_else(|| p.get("population"))
+                })
+                .and_then(|v| v.as_f64())
+                .map(|v| v as u64)
+                .unwrap_or(0);
+
+            // Get coordinates
+            if let Some(geometry) = feature.geometry {
+                if let Value::Point(coords) = geometry.value {
+                    if coords.len() >= 2 {
+                        renderer.add_city(coords[0], coords[1], &name, population);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Process GeoJSON and extract line features
+fn process_geojson_lines<F>(geojson: &GeoJson, mut add_line: F)
+where
+    F: FnMut(Vec<(f64, f64)>),
+{
+    match geojson {
+        GeoJson::FeatureCollection(fc) => {
+            for feature in &fc.features {
+                if let Some(ref geometry) = feature.geometry {
+                    process_geometry_lines(geometry, &mut add_line);
+                }
+            }
+        }
+        GeoJson::Feature(f) => {
+            if let Some(ref geometry) = f.geometry {
+                process_geometry_lines(geometry, &mut add_line);
+            }
+        }
+        GeoJson::Geometry(geometry) => {
+            process_geometry_lines(geometry, &mut add_line);
+        }
+    }
+}
+
+fn process_geometry_lines<F>(geometry: &Geometry, add_line: &mut F)
+where
+    F: FnMut(Vec<(f64, f64)>),
+{
+    match &geometry.value {
         Value::LineString(coords) => {
-            let line: Vec<(f64, f64)> = coords.into_iter().map(|c| (c[0], c[1])).collect();
-            renderer.add_coastline(line, lod);
+            let line: Vec<(f64, f64)> = coords.iter().map(|c| (c[0], c[1])).collect();
+            add_line(line);
         }
         Value::MultiLineString(lines) => {
             for coords in lines {
-                let line: Vec<(f64, f64)> = coords.into_iter().map(|c| (c[0], c[1])).collect();
-                renderer.add_coastline(line, lod);
+                let line: Vec<(f64, f64)> = coords.iter().map(|c| (c[0], c[1])).collect();
+                add_line(line);
             }
         }
         Value::Polygon(rings) => {
-            // Use the exterior ring as a line
-            if let Some(exterior) = rings.into_iter().next() {
-                let line: Vec<(f64, f64)> = exterior.into_iter().map(|c| (c[0], c[1])).collect();
-                renderer.add_coastline(line, lod);
+            if let Some(exterior) = rings.first() {
+                let line: Vec<(f64, f64)> = exterior.iter().map(|c| (c[0], c[1])).collect();
+                add_line(line);
             }
         }
         Value::MultiPolygon(polygons) => {
             for rings in polygons {
-                if let Some(exterior) = rings.into_iter().next() {
-                    let line: Vec<(f64, f64)> = exterior.into_iter().map(|c| (c[0], c[1])).collect();
-                    renderer.add_coastline(line, lod);
+                if let Some(exterior) = rings.first() {
+                    let line: Vec<(f64, f64)> = exterior.iter().map(|c| (c[0], c[1])).collect();
+                    add_line(line);
                 }
             }
         }
         Value::GeometryCollection(geometries) => {
             for g in geometries {
-                process_geometry(renderer, g, lod);
+                process_geometry_lines(g, add_line);
             }
         }
         _ => {}
@@ -91,7 +171,6 @@ fn process_geometry(renderer: &mut MapRenderer, geometry: Geometry, lod: Lod) {
 /// Generate a simple world map outline for when no data file is available
 pub fn generate_simple_world(renderer: &mut MapRenderer) {
     // Simplified continent outlines (used as Low LOD fallback)
-    // North America
     renderer.add_coastline(
         vec![
             (-168.0, 65.0), (-166.0, 60.0), (-141.0, 60.0), (-130.0, 55.0),
@@ -106,7 +185,6 @@ pub fn generate_simple_world(renderer: &mut MapRenderer) {
         Lod::Low,
     );
 
-    // South America
     renderer.add_coastline(
         vec![
             (-80.0, 10.0), (-75.0, 5.0), (-70.0, 5.0), (-60.0, 5.0),
@@ -119,7 +197,6 @@ pub fn generate_simple_world(renderer: &mut MapRenderer) {
         Lod::Low,
     );
 
-    // Europe
     renderer.add_coastline(
         vec![
             (-10.0, 36.0), (-5.0, 36.0), (0.0, 38.0), (5.0, 43.0),
@@ -132,7 +209,6 @@ pub fn generate_simple_world(renderer: &mut MapRenderer) {
         Lod::Low,
     );
 
-    // Africa
     renderer.add_coastline(
         vec![
             (-17.0, 15.0), (-15.0, 10.0), (-10.0, 5.0), (0.0, 5.0),
@@ -144,7 +220,6 @@ pub fn generate_simple_world(renderer: &mut MapRenderer) {
         Lod::Low,
     );
 
-    // Africa north coast
     renderer.add_coastline(
         vec![
             (-17.0, 15.0), (-17.0, 20.0), (-15.0, 28.0), (-5.0, 35.0),
@@ -155,7 +230,6 @@ pub fn generate_simple_world(renderer: &mut MapRenderer) {
         Lod::Low,
     );
 
-    // Asia (simplified)
     renderer.add_coastline(
         vec![
             (35.0, 42.0), (40.0, 43.0), (50.0, 40.0), (55.0, 37.0),
@@ -171,7 +245,6 @@ pub fn generate_simple_world(renderer: &mut MapRenderer) {
         Lod::Low,
     );
 
-    // Australia
     renderer.add_coastline(
         vec![
             (115.0, -20.0), (120.0, -18.0), (130.0, -12.0), (140.0, -12.0),
@@ -182,15 +255,15 @@ pub fn generate_simple_world(renderer: &mut MapRenderer) {
         Lod::Low,
     );
 
-    // Major cities
-    renderer.add_city(-74.0, 40.7, "New York");
-    renderer.add_city(-0.1, 51.5, "London");
-    renderer.add_city(2.3, 48.9, "Paris");
-    renderer.add_city(139.7, 35.7, "Tokyo");
-    renderer.add_city(151.2, -33.9, "Sydney");
-    renderer.add_city(-43.2, -22.9, "Rio");
-    renderer.add_city(37.6, 55.8, "Moscow");
-    renderer.add_city(116.4, 39.9, "Beijing");
-    renderer.add_city(77.2, 28.6, "Delhi");
-    renderer.add_city(-118.2, 34.0, "Los Angeles");
+    // Major cities with populations
+    renderer.add_city(-74.0, 40.7, "New York", 18_800_000);
+    renderer.add_city(-0.1, 51.5, "London", 9_000_000);
+    renderer.add_city(2.3, 48.9, "Paris", 11_000_000);
+    renderer.add_city(139.7, 35.7, "Tokyo", 37_400_000);
+    renderer.add_city(151.2, -33.9, "Sydney", 5_300_000);
+    renderer.add_city(-43.2, -22.9, "Rio", 13_500_000);
+    renderer.add_city(37.6, 55.8, "Moscow", 12_500_000);
+    renderer.add_city(116.4, 39.9, "Beijing", 21_500_000);
+    renderer.add_city(77.2, 28.6, "Delhi", 32_900_000);
+    renderer.add_city(-118.2, 34.0, "Los Angeles", 12_400_000);
 }
