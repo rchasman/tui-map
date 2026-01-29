@@ -22,8 +22,33 @@ fn format_population(pop: u64) -> String {
     }
 }
 
-/// A geographic line (sequence of lon/lat coordinates)
-pub type LineString = Vec<(f64, f64)>;
+/// A geographic line (sequence of lon/lat coordinates) with precomputed bounding box
+#[derive(Clone)]
+pub struct LineString {
+    pub points: Vec<(f64, f64)>,
+    pub bbox: (f64, f64, f64, f64), // min_lon, min_lat, max_lon, max_lat
+}
+
+impl LineString {
+    pub fn new(points: Vec<(f64, f64)>) -> Self {
+        let (mut min_lon, mut max_lon) = (f64::MAX, f64::MIN);
+        let (mut min_lat, mut max_lat) = (f64::MAX, f64::MIN);
+        for &(lon, lat) in &points {
+            min_lon = min_lon.min(lon);
+            max_lon = max_lon.max(lon);
+            min_lat = min_lat.min(lat);
+            max_lat = max_lat.max(lat);
+        }
+        Self {
+            points,
+            bbox: (min_lon, min_lat, max_lon, max_lat),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.points.len()
+    }
+}
 
 /// Level of detail for map data
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -287,9 +312,24 @@ impl MapRenderer {
             return;
         }
 
+        // Quick bounding box check using precomputed bbox
+        let (min_lon, min_lat, max_lon, max_lat) = line.bbox;
+        let (px1, py1) = viewport.project(min_lon, min_lat);
+        let (px2, py2) = viewport.project(max_lon, max_lat);
+        let bb_min_x = px1.min(px2);
+        let bb_max_x = px1.max(px2);
+        let bb_min_y = py1.min(py2);
+        let bb_max_y = py1.max(py2);
+
+        // Skip if bounding box is entirely outside viewport
+        if bb_max_x < 0 || bb_min_x > viewport.width as i32 ||
+           bb_max_y < 0 || bb_min_y > viewport.height as i32 {
+            return;
+        }
+
         let mut prev: Option<(i32, i32)> = None;
 
-        for &(lon, lat) in line {
+        for &(lon, lat) in &line.points {
             let (px, py) = viewport.project(lon, lat);
 
             if let Some((prev_x, prev_y)) = prev {
@@ -304,7 +344,8 @@ impl MapRenderer {
     }
 
     /// Add coastline data at a specific LOD
-    pub fn add_coastline(&mut self, line: LineString, lod: Lod) {
+    pub fn add_coastline(&mut self, points: Vec<(f64, f64)>, lod: Lod) {
+        let line = LineString::new(points);
         match lod {
             Lod::Low => self.coastlines_low.push(line),
             Lod::Medium => self.coastlines_medium.push(line),
@@ -313,7 +354,8 @@ impl MapRenderer {
     }
 
     /// Add border data at a specific LOD
-    pub fn add_border(&mut self, line: LineString, lod: Lod) {
+    pub fn add_border(&mut self, points: Vec<(f64, f64)>, lod: Lod) {
+        let line = LineString::new(points);
         match lod {
             Lod::Medium => self.borders_medium.push(line),
             Lod::High => self.borders_high.push(line),
@@ -322,13 +364,13 @@ impl MapRenderer {
     }
 
     /// Add state/province border
-    pub fn add_state(&mut self, line: LineString) {
-        self.states.push(line);
+    pub fn add_state(&mut self, points: Vec<(f64, f64)>) {
+        self.states.push(LineString::new(points));
     }
 
     /// Add county border
-    pub fn add_county(&mut self, line: LineString) {
-        self.counties.push(line);
+    pub fn add_county(&mut self, points: Vec<(f64, f64)>) {
+        self.counties.push(LineString::new(points));
     }
 
     /// Add a city marker
