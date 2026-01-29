@@ -107,16 +107,16 @@ impl MapWidget {
 impl Widget for MapWidget {
     fn render(self, area: Rect, buf: &mut Buffer) {
         // Render layers from back to front:
-        // 1. County borders (DarkGray - finest detail, at back)
-        self.render_layer(&self.layers.counties, Color::DarkGray, area, buf);
-
-        // 2. Coastlines (Cyan)
+        // 1. Coastlines (Cyan - at back)
         self.render_layer(&self.layers.coastlines, Color::Cyan, area, buf);
+
+        // 2. County borders (DarkGray)
+        self.render_layer(&self.layers.counties, Color::DarkGray, area, buf);
 
         // 3. Country borders (Cyan)
         self.render_layer(&self.layers.borders, Color::Cyan, area, buf);
 
-        // 4. State borders (Yellow - on top so they show over other borders)
+        // 4. State borders (Yellow - on top)
         self.render_layer(&self.layers.states, Color::Yellow, area, buf);
 
         // Then overlay city markers and labels
