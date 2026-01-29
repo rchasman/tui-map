@@ -17,6 +17,15 @@ pub struct Fire {
     pub intensity: u8, // 0-255, decays over time
 }
 
+/// Radioactive fallout zone
+#[derive(Clone)]
+pub struct Fallout {
+    pub lon: f64,
+    pub lat: f64,
+    pub radius_km: f64,
+    pub intensity: u16, // Decays slowly over many frames
+}
+
 /// Application state
 pub struct App {
     pub viewport: Viewport,
@@ -30,6 +39,8 @@ pub struct App {
     pub explosions: Vec<Explosion>,
     /// Active fires
     pub fires: Vec<Fire>,
+    /// Fallout zones
+    pub fallout: Vec<Fallout>,
     /// Total casualties
     pub casualties: u64,
 }
@@ -51,6 +62,7 @@ impl App {
             mouse_pos: None,
             explosions: Vec::new(),
             fires: Vec::new(),
+            fallout: Vec::new(),
             casualties: 0,
         }
     }
@@ -197,7 +209,15 @@ impl App {
             });
         }
 
-        // Calculate casualties
+        // Create fallout zone (larger than blast, persists longer)
+        self.fallout.push(Fallout {
+            lon,
+            lat,
+            radius_km: radius_km * 2.0, // Fallout spreads wider than blast
+            intensity: 1000, // Lasts ~1000 frames
+        });
+
+        // Calculate immediate blast casualties
         self.apply_blast_damage(lon, lat, radius_km);
     }
 
@@ -254,7 +274,48 @@ impl App {
             self.fires.extend(new_fires);
         }
 
-        !self.explosions.is_empty() || !self.fires.is_empty()
+        // Collect damage zones from fires
+        let mut damage_zones = Vec::new();
+        for fire in &self.fires {
+            if fire.intensity > 50 {
+                damage_zones.push((fire.lon, fire.lat, 20.0, 0.001)); // 0.1% per frame
+            }
+        }
+
+        // Update fallout - decay slowly
+        self.fallout.retain_mut(|zone| {
+            zone.intensity = zone.intensity.saturating_sub(1);
+
+            // Fallout causes gradual casualties
+            if zone.intensity > 0 {
+                let damage_rate = (zone.intensity as f64 / 10000.0) * 0.005; // Slower trickle
+                damage_zones.push((zone.lon, zone.lat, zone.radius_km, damage_rate));
+            }
+
+            zone.intensity > 0
+        });
+
+        // Apply all ongoing damage
+        for (lon, lat, radius_km, rate) in damage_zones {
+            self.apply_ongoing_damage(lon, lat, radius_km, rate);
+        }
+
+        !self.explosions.is_empty() || !self.fires.is_empty() || !self.fallout.is_empty()
+    }
+
+    /// Apply ongoing damage (fire/fallout) - small percentage casualties
+    fn apply_ongoing_damage(&mut self, lon: f64, lat: f64, radius_km: f64, rate: f64) {
+        for city in &mut self.map_renderer.cities {
+            if city.population == 0 {
+                continue;
+            }
+            let dist = haversine_km(lon, lat, city.lon, city.lat);
+            if dist < radius_km {
+                let damage = ((city.population as f64 * rate) as u64).max(1);
+                city.population = city.population.saturating_sub(damage);
+                self.casualties += damage;
+            }
+        }
     }
 }
 
