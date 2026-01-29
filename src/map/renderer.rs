@@ -188,25 +188,25 @@ impl MapRenderer {
             }
         }
 
-        // Draw country borders
+        // Draw country borders (master toggle for all political boundaries)
         if self.settings.show_borders {
             let borders = self.get_borders(lod);
             for line in borders {
                 self.draw_linestring(&mut borders_canvas, line, viewport);
             }
-        }
 
-        // Draw state/province borders (separate toggle, visible at zoom >= 4.0)
-        if self.settings.show_states && viewport.zoom >= 4.0 {
-            for line in &self.states {
-                self.draw_linestring(&mut states_canvas, line, viewport);
+            // Draw state/province borders (sub-toggle, visible at zoom >= 4.0)
+            if self.settings.show_states && viewport.zoom >= 4.0 {
+                for line in &self.states {
+                    self.draw_linestring(&mut states_canvas, line, viewport);
+                }
             }
-        }
 
-        // Draw county borders (DarkGray - subtle detail)
-        if self.settings.show_counties && viewport.zoom >= 8.0 {
-            for line in &self.counties {
-                self.draw_linestring(&mut counties_canvas, line, viewport);
+            // Draw county borders (sub-toggle, visible at zoom >= 8.0)
+            if self.settings.show_counties && viewport.zoom >= 8.0 {
+                for line in &self.counties {
+                    self.draw_linestring(&mut counties_canvas, line, viewport);
+                }
             }
         }
 
