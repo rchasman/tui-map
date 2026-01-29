@@ -144,9 +144,13 @@ impl MapRenderer {
         } else if zoom > 6.0 {
             50
         } else if zoom > 4.0 {
-            25
+            30
+        } else if zoom > 3.0 {
+            20
+        } else if zoom > 2.0 {
+            15
         } else {
-            10
+            8
         }
     }
 
