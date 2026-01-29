@@ -166,7 +166,7 @@ impl MapRenderer {
         }
 
         // Collect cities for glyph rendering (viewport-aware filtering)
-        if self.settings.show_cities && viewport.zoom > 2.0 {
+        if self.settings.show_cities {
             // First, collect all visible cities with their screen positions
             let mut visible_cities: Vec<(&City, u16, u16)> = self.cities
                 .iter()
@@ -180,16 +180,33 @@ impl MapRenderer {
                 })
                 .collect();
 
-            // Sort by population descending (largest cities first)
-            visible_cities.sort_by(|a, b| b.0.population.cmp(&a.0.population));
+            // Sort: capitals first, then megacities, then by population
+            visible_cities.sort_by(|a, b| {
+                match (a.0.is_capital, b.0.is_capital) {
+                    (true, false) => std::cmp::Ordering::Less,
+                    (false, true) => std::cmp::Ordering::Greater,
+                    _ => match (a.0.is_megacity, b.0.is_megacity) {
+                        (true, false) => std::cmp::Ordering::Less,
+                        (false, true) => std::cmp::Ordering::Greater,
+                        _ => b.0.population.cmp(&a.0.population),
+                    }
+                }
+            });
 
-            // Take top N based on zoom level
+            // At low zoom, only show capitals and megacities
+            // At higher zoom, show more cities
             let max_cities = Self::max_cities_for_zoom(viewport.zoom);
 
             // Find max population in visible set for relative sizing
             let max_pop = visible_cities.first().map(|(c, _, _)| c.population).unwrap_or(1);
 
-            for (city, char_x, char_y) in visible_cities.into_iter().take(max_cities) {
+            let mut city_count = 0usize;
+            for (city, char_x, char_y) in visible_cities.into_iter() {
+                // Always show capitals and megacities, otherwise respect max_cities limit
+                if !city.is_capital && !city.is_megacity && city_count >= max_cities {
+                    continue;
+                }
+                city_count += 1;
                 // Choose glyph based on city type and relative population
                 let ratio = city.population as f64 / max_pop as f64;
                 let glyph = if city.is_capital {
