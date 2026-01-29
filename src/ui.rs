@@ -134,10 +134,6 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
             Style::default().fg(if settings.show_borders { Color::Green } else { Color::DarkGray }),
         ),
         Span::styled(
-            if settings.show_states { "[S]tates " } else { "[s]tates " },
-            Style::default().fg(if settings.show_states { Color::Green } else { Color::DarkGray }),
-        ),
-        Span::styled(
             if settings.show_cities { "[C]ities " } else { "[c]ities " },
             Style::default().fg(if settings.show_cities { Color::Green } else { Color::DarkGray }),
         ),

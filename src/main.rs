@@ -99,9 +99,6 @@ fn run(terminal: &mut DefaultTerminal) -> Result<()> {
                             KeyCode::Char('b') | KeyCode::Char('B') => {
                                 app.map_renderer.toggle_borders();
                             }
-                            KeyCode::Char('s') | KeyCode::Char('S') => {
-                                app.map_renderer.toggle_states();
-                            }
                             KeyCode::Char('c') | KeyCode::Char('C') => {
                                 app.map_renderer.toggle_cities();
                             }

@@ -40,7 +40,6 @@ pub struct City {
 pub struct DisplaySettings {
     pub show_coastlines: bool,
     pub show_borders: bool,
-    pub show_states: bool,
     pub show_cities: bool,
     pub show_labels: bool,
 }
@@ -50,7 +49,6 @@ impl Default for DisplaySettings {
         Self {
             show_coastlines: true,
             show_borders: true,
-            show_states: true,
             show_cities: true,
             show_labels: true,
         }
@@ -152,18 +150,18 @@ impl MapRenderer {
             }
         }
 
-        // Draw borders
+        // Draw borders (country and state/province)
         if self.settings.show_borders {
             let borders = self.get_borders(lod);
             for line in borders {
                 self.draw_linestring(canvas, line, viewport);
             }
-        }
 
-        // Draw state/province borders (only at high zoom)
-        if self.settings.show_states && viewport.zoom >= 4.0 {
-            for line in &self.states {
-                self.draw_linestring(canvas, line, viewport);
+            // State/province borders only at higher zoom
+            if viewport.zoom >= 4.0 {
+                for line in &self.states {
+                    self.draw_linestring(canvas, line, viewport);
+                }
             }
         }
 
@@ -269,14 +267,9 @@ impl MapRenderer {
         self.settings.show_labels = !self.settings.show_labels;
     }
 
-    /// Toggle borders
+    /// Toggle borders (country + state/province)
     pub fn toggle_borders(&mut self) {
         self.settings.show_borders = !self.settings.show_borders;
-    }
-
-    /// Toggle state/province borders
-    pub fn toggle_states(&mut self) {
-        self.settings.show_states = !self.settings.show_states;
     }
 
     /// Toggle cities
