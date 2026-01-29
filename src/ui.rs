@@ -51,10 +51,23 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
 
     let labels = app.map_renderer.render(&mut canvas, &viewport);
 
+    // Get mouse cursor position for marker
+    let cursor_pos = app.mouse_pixel_pos().and_then(|(px, py)| {
+        // Convert braille pixels to character position
+        let cx = (px / 2) as u16;
+        let cy = (py / 4) as u16;
+        if cx < inner.width && cy < inner.height {
+            Some((cx, cy))
+        } else {
+            None
+        }
+    });
+
     // Render braille map
     let map_widget = MapWidget {
         canvas,
         labels,
+        cursor_pos,
         inner_width: inner.width,
         inner_height: inner.height,
     };
@@ -65,6 +78,7 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
 struct MapWidget {
     canvas: BrailleCanvas,
     labels: Vec<(u16, u16, String)>,
+    cursor_pos: Option<(u16, u16)>,
     inner_width: u16,
     inner_height: u16,
 }
@@ -114,6 +128,15 @@ impl Widget for MapWidget {
                 if px < area.x + area.width {
                     buf[(px, y)].set_char(ch).set_style(style);
                 }
+            }
+        }
+
+        // Render cursor marker
+        if let Some((cx, cy)) = self.cursor_pos {
+            let x = area.x + cx;
+            let y = area.y + cy;
+            if x < area.x + area.width && y < area.y + area.height {
+                buf[(x, y)].set_char('╋').set_fg(Color::Red);
             }
         }
     }

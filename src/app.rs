@@ -7,6 +7,8 @@ pub struct App {
     pub should_quit: bool,
     /// Last mouse position for drag tracking
     pub last_mouse: Option<(u16, u16)>,
+    /// Current mouse position for cursor marker
+    pub mouse_pos: Option<(u16, u16)>,
 }
 
 impl App {
@@ -20,6 +22,7 @@ impl App {
             map_renderer: MapRenderer::new(),
             should_quit: false,
             last_mouse: None,
+            mouse_pos: None,
         }
     }
 
@@ -96,8 +99,15 @@ impl App {
         if let Some((last_x, last_y)) = self.last_mouse {
             let dx = last_x as i32 - x as i32;
             let dy = last_y as i32 - y as i32;
-            // Scale by 5 for responsive dragging
-            self.pan(dx * 5, dy * 5);
+            // Scale based on zoom: less sensitive when zoomed out
+            let scale = if self.viewport.zoom < 2.0 {
+                2
+            } else if self.viewport.zoom < 4.0 {
+                3
+            } else {
+                4
+            };
+            self.pan(dx * scale, dy * scale);
         }
         self.last_mouse = Some((x, y));
     }
@@ -105,5 +115,21 @@ impl App {
     /// Reset drag state when mouse button released
     pub fn end_drag(&mut self) {
         self.last_mouse = None;
+    }
+
+    /// Update mouse cursor position
+    pub fn set_mouse_pos(&mut self, col: u16, row: u16) {
+        self.mouse_pos = Some((col, row));
+    }
+
+    /// Get mouse position in braille pixel coordinates (for rendering marker)
+    pub fn mouse_pixel_pos(&self) -> Option<(i32, i32)> {
+        self.mouse_pos.map(|(col, row)| {
+            // Convert terminal coords to braille pixel coords
+            // Account for border (1 cell offset)
+            let px = ((col.saturating_sub(1)) as i32) * 2;
+            let py = ((row.saturating_sub(1)) as i32) * 4;
+            (px, py)
+        })
     }
 }

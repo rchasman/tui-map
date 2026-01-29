@@ -35,6 +35,9 @@ fn main() -> Result<()> {
 
 /// Handle mouse events for panning and zooming
 fn handle_mouse(app: &mut App, mouse: MouseEvent) {
+    // Always track mouse position for cursor marker
+    app.set_mouse_pos(mouse.column, mouse.row);
+
     match mouse.kind {
         // Scroll wheel for zooming towards mouse position
         MouseEventKind::ScrollUp => app.zoom_in_at(mouse.column, mouse.row),
