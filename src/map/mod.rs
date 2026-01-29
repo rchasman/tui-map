@@ -3,4 +3,4 @@ mod projection;
 mod renderer;
 
 pub use projection::Viewport;
-pub use renderer::{Lod, MapRenderer};
+pub use renderer::{Lod, MapLayers, MapRenderer};

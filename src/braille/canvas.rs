@@ -18,16 +18,6 @@ impl BrailleCanvas {
         }
     }
 
-    /// Get the effective pixel width (2x character width)
-    pub fn pixel_width(&self) -> usize {
-        self.width * 2
-    }
-
-    /// Get the effective pixel height (4x character height)
-    pub fn pixel_height(&self) -> usize {
-        self.height * 4
-    }
-
     /// Set a pixel at the given coordinates.
     /// Braille dot layout per character:
     /// ```

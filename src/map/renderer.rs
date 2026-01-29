@@ -2,6 +2,15 @@ use crate::braille::BrailleCanvas;
 use crate::map::geometry::draw_line;
 use crate::map::projection::Viewport;
 
+/// Rendered map layers with separate canvases for color differentiation
+pub struct MapLayers {
+    pub coastlines: BrailleCanvas,
+    pub borders: BrailleCanvas,
+    pub states: BrailleCanvas,
+    pub counties: BrailleCanvas,
+    pub labels: Vec<(u16, u16, String)>,
+}
+
 /// Format population as compact string (e.g., 1.2M, 500K)
 fn format_population(pop: u64) -> String {
     if pop >= 1_000_000 {
@@ -158,38 +167,44 @@ impl MapRenderer {
         }
     }
 
-    /// Render all map features to the canvas
-    pub fn render(&self, canvas: &mut BrailleCanvas, viewport: &Viewport) -> Vec<(u16, u16, String)> {
+    /// Render all map features to separate layered canvases
+    pub fn render(&self, width: usize, height: usize, viewport: &Viewport) -> MapLayers {
         let lod = Lod::from_zoom(viewport.zoom);
         let mut labels = Vec::new();
 
-        // Draw coastlines
+        // Create separate canvases for each layer
+        let mut coastlines_canvas = BrailleCanvas::new(width, height);
+        let mut borders_canvas = BrailleCanvas::new(width, height);
+        let mut states_canvas = BrailleCanvas::new(width, height);
+        let mut counties_canvas = BrailleCanvas::new(width, height);
+
+        // Draw coastlines (Cyan - base map)
         if self.settings.show_coastlines {
             let coastlines = self.get_coastlines(lod);
             for line in coastlines {
-                self.draw_linestring(canvas, line, viewport);
+                self.draw_linestring(&mut coastlines_canvas, line, viewport);
             }
         }
 
-        // Draw borders (country and state/province)
+        // Draw country borders (White - most prominent)
         if self.settings.show_borders {
             let borders = self.get_borders(lod);
             for line in borders {
-                self.draw_linestring(canvas, line, viewport);
+                self.draw_linestring(&mut borders_canvas, line, viewport);
             }
 
-            // State/province borders only at higher zoom
+            // State/province borders (Yellow - medium prominence)
             if viewport.zoom >= 4.0 {
                 for line in &self.states {
-                    self.draw_linestring(canvas, line, viewport);
+                    self.draw_linestring(&mut states_canvas, line, viewport);
                 }
             }
         }
 
-        // Draw county borders at high zoom
+        // Draw county borders (DarkGray - subtle detail)
         if self.settings.show_counties && viewport.zoom >= 8.0 {
             for line in &self.counties {
-                self.draw_linestring(canvas, line, viewport);
+                self.draw_linestring(&mut counties_canvas, line, viewport);
             }
         }
 
@@ -255,7 +270,13 @@ impl MapRenderer {
             }
         }
 
-        labels
+        MapLayers {
+            coastlines: coastlines_canvas,
+            borders: borders_canvas,
+            states: states_canvas,
+            counties: counties_canvas,
+            labels,
+        }
     }
 
     /// Draw a linestring with viewport culling

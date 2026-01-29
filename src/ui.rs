@@ -1,5 +1,5 @@
 use crate::app::App;
-use crate::braille::BrailleCanvas;
+use crate::map::MapLayers;
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Direction, Layout, Rect},
@@ -41,15 +41,14 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    // Create braille canvas sized to inner area
-    let mut canvas = BrailleCanvas::new(inner.width as usize, inner.height as usize);
-
-    // Update viewport size and render
+    // Update viewport size for rendering
     let mut viewport = app.viewport.clone();
-    viewport.width = canvas.pixel_width();
-    viewport.height = canvas.pixel_height();
+    // Braille gives 2x4 resolution per character
+    viewport.width = inner.width as usize * 2;
+    viewport.height = inner.height as usize * 4;
 
-    let labels = app.map_renderer.render(&mut canvas, &viewport);
+    // Render map layers
+    let layers = app.map_renderer.render(inner.width as usize, inner.height as usize, &viewport);
 
     // Get mouse cursor position for marker
     let cursor_pos = app.mouse_pixel_pos().and_then(|(px, py)| {
@@ -65,8 +64,7 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
 
     // Render braille map
     let map_widget = MapWidget {
-        canvas,
-        labels,
+        layers,
         cursor_pos,
         inner_width: inner.width,
         inner_height: inner.height,
@@ -76,17 +74,16 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
 
 /// Custom widget that renders braille map with text labels overlaid
 struct MapWidget {
-    canvas: BrailleCanvas,
-    labels: Vec<(u16, u16, String)>,
+    layers: MapLayers,
     cursor_pos: Option<(u16, u16)>,
     inner_width: u16,
     inner_height: u16,
 }
 
-impl Widget for MapWidget {
-    fn render(self, area: Rect, buf: &mut Buffer) {
-        // First render the braille characters
-        for (row_idx, row_str) in self.canvas.rows().enumerate() {
+impl MapWidget {
+    /// Render a braille canvas layer with a specific color
+    fn render_layer(&self, canvas: &crate::braille::BrailleCanvas, color: Color, area: Rect, buf: &mut Buffer) {
+        for (row_idx, row_str) in canvas.rows().enumerate() {
             if row_idx >= area.height as usize {
                 break;
             }
@@ -96,16 +93,37 @@ impl Widget for MapWidget {
                 if col_idx >= area.width as usize {
                     break;
                 }
+                // Skip empty braille characters (U+2800)
+                if ch == '\u{2800}' {
+                    continue;
+                }
                 let x = area.x + col_idx as u16;
-                buf[(x, y)].set_char(ch).set_fg(Color::Cyan);
+                buf[(x, y)].set_char(ch).set_fg(color);
             }
         }
+    }
+}
+
+impl Widget for MapWidget {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        // Render layers from back to front with color hierarchy:
+        // 1. Coastlines (Cyan - base map)
+        self.render_layer(&self.layers.coastlines, Color::Cyan, area, buf);
+
+        // 2. County borders (DarkGray - subtle detail)
+        self.render_layer(&self.layers.counties, Color::DarkGray, area, buf);
+
+        // 3. State borders (Yellow - medium prominence)
+        self.render_layer(&self.layers.states, Color::Yellow, area, buf);
+
+        // 4. Country borders (White - most prominent)
+        self.render_layer(&self.layers.borders, Color::White, area, buf);
 
         // Then overlay city markers and labels
         let marker_style = Style::default().fg(Color::White);
         let label_style = Style::default().fg(Color::Yellow);
 
-        for (lx, ly, text) in &self.labels {
+        for (lx, ly, text) in &self.layers.labels {
             // Check bounds
             if *ly >= self.inner_height || *lx >= self.inner_width {
                 continue;
