@@ -122,6 +122,13 @@ fn run(terminal: &mut DefaultTerminal) -> Result<()> {
                                 app.map_renderer.toggle_population();
                             }
 
+                            // Launch nuke at cursor
+                            KeyCode::Char(' ') => {
+                                if let Some((col, row)) = app.mouse_pos {
+                                    app.launch_nuke(col, row);
+                                }
+                            }
+
                             // Reset view
                             KeyCode::Char('r') | KeyCode::Char('0') => {
                                 let size = terminal.size()?;

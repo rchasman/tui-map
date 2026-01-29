@@ -273,7 +273,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
             )
         } else {
             Span::styled(
-                " | Right-click to nuke",
+                " | SPACE to nuke",
                 Style::default().fg(Color::DarkGray),
             )
         },
