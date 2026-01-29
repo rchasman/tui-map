@@ -38,32 +38,6 @@ pub fn draw_line(canvas: &mut BrailleCanvas, x0: i32, y0: i32, x1: i32, y1: i32)
     }
 }
 
-/// Draw a thicker line (useful for borders at low zoom)
-pub fn draw_thick_line(canvas: &mut BrailleCanvas, x0: i32, y0: i32, x1: i32, y1: i32) {
-    draw_line(canvas, x0, y0, x1, y1);
-    draw_line(canvas, x0 + 1, y0, x1 + 1, y1);
-    draw_line(canvas, x0, y0 + 1, x1, y1 + 1);
-}
-
-/// Draw a point marker (small cross)
-pub fn draw_marker(canvas: &mut BrailleCanvas, x: i32, y: i32, size: i32) {
-    for i in -size..=size {
-        canvas.set_pixel_signed(x + i, y);
-        canvas.set_pixel_signed(x, y + i);
-    }
-}
-
-/// Draw a filled circle (for city markers)
-pub fn draw_circle(canvas: &mut BrailleCanvas, cx: i32, cy: i32, radius: i32) {
-    for dy in -radius..=radius {
-        for dx in -radius..=radius {
-            if dx * dx + dy * dy <= radius * radius {
-                canvas.set_pixel_signed(cx + dx, cy + dy);
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -28,15 +28,6 @@ impl BrailleCanvas {
         self.height * 4
     }
 
-    /// Clear all pixels
-    pub fn clear(&mut self) {
-        for row in &mut self.pixels {
-            for cell in row {
-                *cell = 0;
-            }
-        }
-    }
-
     /// Set a pixel at the given coordinates.
     /// Braille dot layout per character:
     /// ```
@@ -76,6 +67,7 @@ impl BrailleCanvas {
     }
 
     /// Convert the canvas to a string of Braille characters
+    #[cfg(test)]
     pub fn to_string(&self) -> String {
         self.pixels
             .iter()
