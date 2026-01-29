@@ -55,6 +55,10 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent) {
         MouseEventKind::Up(MouseButton::Left) => {
             app.end_drag();
         }
+        // Right click to launch nuke
+        MouseEventKind::Down(MouseButton::Right) => {
+            app.launch_nuke(mouse.column, mouse.row);
+        }
         _ => {}
     }
 }
@@ -141,6 +145,9 @@ fn run(terminal: &mut DefaultTerminal) -> Result<()> {
                 _ => {}
             }
         }
+
+        // Update explosion animations
+        app.update_explosions();
 
         if app.should_quit {
             break;

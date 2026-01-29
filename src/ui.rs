@@ -62,10 +62,23 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
         }
     });
 
+    // Convert explosions to screen coordinates
+    let explosions: Vec<ExplosionRender> = app.explosions.iter().filter_map(|exp| {
+        let (px, py) = viewport.project(exp.lon, exp.lat);
+        let cx = (px / 2) as u16;
+        let cy = (py / 4) as u16;
+        if cx < inner.width && cy < inner.height {
+            Some(ExplosionRender { x: cx, y: cy, frame: exp.frame })
+        } else {
+            None
+        }
+    }).collect();
+
     // Render braille map
     let map_widget = MapWidget {
         layers,
         cursor_pos,
+        explosions,
         has_states: app.map_renderer.settings.show_states,
         zoom: viewport.zoom,
         inner_width: inner.width,
@@ -74,10 +87,18 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(map_widget, inner);
 }
 
+/// An explosion to render
+struct ExplosionRender {
+    x: u16,
+    y: u16,
+    frame: u8,
+}
+
 /// Custom widget that renders braille map with text labels overlaid
 struct MapWidget {
     layers: MapLayers,
     cursor_pos: Option<(u16, u16)>,
+    explosions: Vec<ExplosionRender>,
     has_states: bool,
     zoom: f64,
     inner_width: u16,
@@ -155,6 +176,42 @@ impl Widget for MapWidget {
             }
         }
 
+        // Render explosions
+        for exp in &self.explosions {
+            let x = area.x + exp.x;
+            let y = area.y + exp.y;
+
+            // Explosion grows then fades
+            let radius = (exp.frame as i16 / 2).min(5);
+            let (ch, color) = if exp.frame < 5 {
+                ('*', Color::White)
+            } else if exp.frame < 10 {
+                ('☢', Color::Yellow)
+            } else {
+                ('░', Color::Red)
+            };
+
+            // Draw expanding ring
+            for dy in -radius..=radius {
+                for dx in -radius..=radius {
+                    let dist = (dx.abs() + dy.abs()) as i16;
+                    if dist <= radius && dist >= radius - 1 {
+                        let px = (x as i16 + dx) as u16;
+                        let py = (y as i16 + dy) as u16;
+                        if px >= area.x && px < area.x + area.width &&
+                           py >= area.y && py < area.y + area.height {
+                            buf[(px, py)].set_char(ch).set_fg(color);
+                        }
+                    }
+                }
+            }
+
+            // Draw center
+            if x < area.x + area.width && y < area.y + area.height {
+                buf[(x, y)].set_char('☢').set_fg(Color::Red);
+            }
+        }
+
         // Render cursor marker
         if let Some((cx, cy)) = self.cursor_pos {
             let x = area.x + cx;
@@ -202,12 +259,32 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         ),
         Span::styled("| ", Style::default().fg(Color::DarkGray)),
         Span::styled(app.center_coords(), Style::default().fg(Color::Cyan)),
-        Span::styled(
-            " | hjkl:pan +/-:zoom r:reset q:quit",
-            Style::default().fg(Color::DarkGray),
-        ),
+        if app.casualties > 0 {
+            Span::styled(
+                format!(" | CASUALTIES: {}", format_casualties(app.casualties)),
+                Style::default().fg(Color::Red),
+            )
+        } else {
+            Span::styled(
+                " | Right-click to nuke",
+                Style::default().fg(Color::DarkGray),
+            )
+        },
     ]);
 
     let paragraph = Paragraph::new(status);
     frame.render_widget(paragraph, area);
+}
+
+/// Format casualties with suffix (K, M, B)
+fn format_casualties(n: u64) -> String {
+    if n >= 1_000_000_000 {
+        format!("{:.1}B", n as f64 / 1_000_000_000.0)
+    } else if n >= 1_000_000 {
+        format!("{:.1}M", n as f64 / 1_000_000.0)
+    } else if n >= 1_000 {
+        format!("{:.0}K", n as f64 / 1_000.0)
+    } else {
+        n.to_string()
+    }
 }

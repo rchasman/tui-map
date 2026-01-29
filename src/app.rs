@@ -1,5 +1,14 @@
 use crate::map::{Lod, MapRenderer, Viewport};
 
+/// A nuclear explosion with position and animation frame
+#[derive(Clone)]
+pub struct Explosion {
+    pub lon: f64,
+    pub lat: f64,
+    pub frame: u8,
+    pub radius_km: f64,
+}
+
 /// Application state
 pub struct App {
     pub viewport: Viewport,
@@ -9,6 +18,10 @@ pub struct App {
     pub last_mouse: Option<(u16, u16)>,
     /// Current mouse position for cursor marker
     pub mouse_pos: Option<(u16, u16)>,
+    /// Active explosions
+    pub explosions: Vec<Explosion>,
+    /// Total casualties
+    pub casualties: u64,
 }
 
 impl App {
@@ -26,6 +39,8 @@ impl App {
             should_quit: false,
             last_mouse: None,
             mouse_pos: None,
+            explosions: Vec::new(),
+            casualties: 0,
         }
     }
 
@@ -138,4 +153,60 @@ impl App {
             (px, py)
         })
     }
+
+    /// Launch a nuke at the given screen position
+    pub fn launch_nuke(&mut self, col: u16, row: u16) {
+        let px = ((col.saturating_sub(1)) as i32) * 2;
+        let py = ((row.saturating_sub(1)) as i32) * 4;
+        let (lon, lat) = self.viewport.unproject(px, py);
+
+        // Blast radius ~50km (scales with zoom for visual effect)
+        let radius_km = 50.0 + 100.0 / self.viewport.zoom;
+
+        self.explosions.push(Explosion {
+            lon,
+            lat,
+            frame: 0,
+            radius_km,
+        });
+
+        // Calculate casualties
+        self.apply_blast_damage(lon, lat, radius_km);
+    }
+
+    /// Apply blast damage to cities within radius
+    fn apply_blast_damage(&mut self, lon: f64, lat: f64, radius_km: f64) {
+        for city in &mut self.map_renderer.cities {
+            let dist = haversine_km(lon, lat, city.lon, city.lat);
+            if dist < radius_km {
+                // Closer = more casualties (inverse square falloff)
+                let damage_ratio = 1.0 - (dist / radius_km).powi(2);
+                let killed = (city.population as f64 * damage_ratio * 0.8) as u64;
+                city.population = city.population.saturating_sub(killed);
+                self.casualties += killed;
+            }
+        }
+    }
+
+    /// Update explosion animations, returns true if any are active
+    pub fn update_explosions(&mut self) -> bool {
+        self.explosions.retain_mut(|exp| {
+            exp.frame += 1;
+            exp.frame < 20 // Animation lasts 20 frames
+        });
+        !self.explosions.is_empty()
+    }
+}
+
+/// Haversine distance in kilometers
+fn haversine_km(lon1: f64, lat1: f64, lon2: f64, lat2: f64) -> f64 {
+    let r = 6371.0; // Earth radius in km
+    let dlat = (lat2 - lat1).to_radians();
+    let dlon = (lon2 - lon1).to_radians();
+    let lat1 = lat1.to_radians();
+    let lat2 = lat2.to_radians();
+
+    let a = (dlat / 2.0).sin().powi(2) + lat1.cos() * lat2.cos() * (dlon / 2.0).sin().powi(2);
+    let c = 2.0 * a.sqrt().asin();
+    r * c
 }
