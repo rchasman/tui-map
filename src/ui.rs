@@ -115,63 +115,85 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
         explosions.truncate(MAX_VISIBLE_EXPLOSIONS);
     }
 
-    // Convert fires to screen coordinates with culling and wrapping
-    // Pre-allocate to avoid reallocations (will truncate to 2000 anyway)
+    // Convert fires to screen coordinates
+    // At low zoom: use O(1) fire grid (1° cells) - much faster for many fires
+    // At high zoom: use individual fires for detail
     let mut fires: Vec<FireRender> = Vec::with_capacity(2000);
 
-    // Compute viewport bounds in lon/lat for fast culling (avoid expensive projections)
-    let half_width_deg = 180.0 / viewport.zoom;
-    let half_height_deg = 90.0 / viewport.zoom;
-    let min_lon = viewport.center_lon - half_width_deg * 1.5; // 1.5x margin for wrapping
-    let max_lon = viewport.center_lon + half_width_deg * 1.5;
-    let min_lat = (viewport.center_lat - half_height_deg * 1.5).max(-90.0);
-    let max_lat = (viewport.center_lat + half_height_deg * 1.5).min(90.0);
+    // Degrees per terminal character - determines LOD threshold
+    let deg_per_char = 360.0 / (viewport.zoom * inner.width as f64);
+    let use_grid = deg_per_char > 0.5; // Use grid when each char covers > 0.5°
 
-    for fire in &app.fires {
-        // Cull faintest fires early
-        if fire.intensity < 10 {
-            continue;
+    if use_grid {
+        // O(1) grid-based rendering: iterate visible grid cells only
+        for (lon, lat, intensity) in app.fire_grid.iter_fires() {
+            // Project grid cell center
+            for &offset in &[0.0, -360.0, 360.0] {
+                let ((px, py), _) = viewport.project_wrapped(lon, lat, offset);
+
+                if px < 0 || py < 0 || px > 30000 || py > 30000 {
+                    continue;
+                }
+
+                let cx = (px / 2) as u16;
+                let cy = (py / 4) as u16;
+
+                if cx < inner.width && cy < inner.height {
+                    fires.push(FireRender { x: cx, y: cy, intensity });
+                    break;
+                }
+            }
         }
+    } else {
+        // High zoom: render individual fires for detail
+        let half_width_deg = 180.0 / viewport.zoom;
+        let half_height_deg = 90.0 / viewport.zoom;
+        let min_lon = viewport.center_lon - half_width_deg * 1.5;
+        let max_lon = viewport.center_lon + half_width_deg * 1.5;
+        let min_lat = (viewport.center_lat - half_height_deg * 1.5).max(-90.0);
+        let max_lat = (viewport.center_lat + half_height_deg * 1.5).min(90.0);
 
-        // Fast viewport culling BEFORE expensive projection (with wrapping checks)
-        let mut in_view = fire.lat >= min_lat && fire.lat <= max_lat;
-        if in_view {
-            // Check if fire is visible at any of the wrapped positions
-            in_view = (fire.lon >= min_lon && fire.lon <= max_lon) ||
-                      (fire.lon - 360.0 >= min_lon && fire.lon - 360.0 <= max_lon) ||
-                      (fire.lon + 360.0 >= min_lon && fire.lon + 360.0 <= max_lon);
-        }
-
-        if !in_view {
-            continue;
-        }
-
-        // Try normal position and wrapped positions
-        for &offset in &[0.0, -360.0, 360.0] {
-            let ((px, py), _) = viewport.project_wrapped(fire.lon, fire.lat, offset);
-
-            // Bounds check with safety margin to prevent u16 overflow panics
-            if px < 0 || py < 0 || px > 30000 || py > 30000 {
+        for fire in &app.fires {
+            if fire.intensity < 10 {
                 continue;
             }
 
-            let cx = (px / 2) as u16;
-            let cy = (py / 4) as u16;
+            // Fast viewport culling
+            let mut in_view = fire.lat >= min_lat && fire.lat <= max_lat;
+            if in_view {
+                in_view = (fire.lon >= min_lon && fire.lon <= max_lon) ||
+                          (fire.lon - 360.0 >= min_lon && fire.lon - 360.0 <= max_lon) ||
+                          (fire.lon + 360.0 >= min_lon && fire.lon + 360.0 <= max_lon);
+            }
 
-            if cx < inner.width && cy < inner.height {
-                fires.push(FireRender { x: cx, y: cy, intensity: fire.intensity });
-                break; // Only render once per fire (avoid duplicates)
+            if !in_view {
+                continue;
+            }
+
+            for &offset in &[0.0, -360.0, 360.0] {
+                let ((px, py), _) = viewport.project_wrapped(fire.lon, fire.lat, offset);
+
+                if px < 0 || py < 0 || px > 30000 || py > 30000 {
+                    continue;
+                }
+
+                let cx = (px / 2) as u16;
+                let cy = (py / 4) as u16;
+
+                if cx < inner.width && cy < inner.height {
+                    fires.push(FireRender { x: cx, y: cy, intensity: fire.intensity });
+                    break;
+                }
             }
         }
-    }
 
-    // Limit max visible fires - sample evenly across the vec to show all blast sites
-    // Simple stride-based sampling: if we have 6000 fires and want 2000, take every 3rd
-    const MAX_VISIBLE_FIRES: usize = 2000;
-    if fires.len() > MAX_VISIBLE_FIRES {
-        let stride = fires.len() / MAX_VISIBLE_FIRES;
-        let sampled: Vec<FireRender> = fires.iter().step_by(stride).take(MAX_VISIBLE_FIRES).copied().collect();
-        fires = sampled;
+        // Limit individual fires to avoid slowdown
+        const MAX_VISIBLE_FIRES: usize = 2000;
+        if fires.len() > MAX_VISIBLE_FIRES {
+            let stride = fires.len() / MAX_VISIBLE_FIRES;
+            let sampled: Vec<FireRender> = fires.iter().step_by(stride).take(MAX_VISIBLE_FIRES).copied().collect();
+            fires = sampled;
+        }
     }
 
     // Calculate blast radius for cursor reticle
