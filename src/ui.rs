@@ -62,33 +62,80 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
         }
     });
 
-    // Convert explosions to screen coordinates
-    let explosions: Vec<ExplosionRender> = app.explosions.iter().filter_map(|exp| {
+    // Convert explosions to screen coordinates with aggressive culling
+    // Note: Damage calculations still run in app.update_explosions() regardless of viewport
+    // This only culls *rendering* to avoid expensive O(r²) nested loops for off-screen effects
+    let mut explosions: Vec<ExplosionRender> = app.explosions.iter().filter_map(|exp| {
         let (px, py) = viewport.project(exp.lon, exp.lat);
+
+        // Early rejection: negative coords mean off-screen left/top
+        if px < 0 || py < 0 {
+            return None;
+        }
+
         let cx = (px / 2) as u16;
         let cy = (py / 4) as u16;
+
+        // Convert radius_km to screen chars (rough: 1 degree ~= 111km at equator)
+        let degrees = exp.radius_km / 111.0;
+        let pixels = (degrees * viewport.zoom * inner.width as f64 / 360.0) as u16;
+        let radius = (pixels / 2).max(3).min(15); // Clamp to reasonable range
+
+        // Cull if too small to see when zoomed out (< 2 chars radius)
+        if radius < 2 {
+            return None;
+        }
+
+        // Cull if entirely off-screen (center + radius outside bounds)
+        if cx >= inner.width + radius || cy >= inner.height + radius {
+            return None;
+        }
+
+        // Cull if center too far off-screen (even if edge might be visible)
         if cx < inner.width && cy < inner.height {
-            // Convert radius_km to screen chars (rough: 1 degree ~= 111km at equator)
-            let degrees = exp.radius_km / 111.0;
-            let pixels = (degrees * viewport.zoom * inner.width as f64 / 360.0) as u16;
-            let radius = (pixels / 2).max(3).min(15); // Clamp to reasonable range
             Some(ExplosionRender { x: cx, y: cy, frame: exp.frame, radius })
         } else {
             None
         }
     }).collect();
 
-    // Convert fires to screen coordinates
-    let fires: Vec<FireRender> = app.fires.iter().filter_map(|fire| {
+    // Limit max visible explosions (sort by radius descending, show biggest)
+    const MAX_VISIBLE_EXPLOSIONS: usize = 50;
+    if explosions.len() > MAX_VISIBLE_EXPLOSIONS {
+        explosions.sort_by_key(|e| std::cmp::Reverse(e.radius));
+        explosions.truncate(MAX_VISIBLE_EXPLOSIONS);
+    }
+
+    // Convert fires to screen coordinates with culling
+    let mut fires: Vec<FireRender> = app.fires.iter().filter_map(|fire| {
+        // Cull very faint fires (intensity < 20 is barely visible)
+        if fire.intensity < 20 {
+            return None;
+        }
+
         let (px, py) = viewport.project(fire.lon, fire.lat);
+
+        // Early rejection: negative coords or out of bounds
+        if px < 0 || py < 0 {
+            return None;
+        }
+
         let cx = (px / 2) as u16;
         let cy = (py / 4) as u16;
-        if cx < inner.width && cy < inner.height && px >= 0 && py >= 0 {
+
+        if cx < inner.width && cy < inner.height {
             Some(FireRender { x: cx, y: cy, intensity: fire.intensity })
         } else {
             None
         }
     }).collect();
+
+    // Limit max visible fires (keep only the most intense)
+    const MAX_VISIBLE_FIRES: usize = 200;
+    if fires.len() > MAX_VISIBLE_FIRES {
+        fires.sort_by_key(|f| std::cmp::Reverse(f.intensity));
+        fires.truncate(MAX_VISIBLE_FIRES);
+    }
 
     // Render braille map
     let map_widget = MapWidget {
@@ -245,6 +292,13 @@ impl Widget for MapWidget {
             // Draw mushroom cloud shape - wider at top, stem below
             let radius_i16 = exp.radius as i16;
             for dy in -(radius_i16 + 2)..=(radius_i16) {
+                let py = (y as i16 + dy) as u16;
+
+                // Skip entire row if off-screen (y-axis culling)
+                if py < area.y || py >= area.y + area.height {
+                    continue;
+                }
+
                 let dy_sq = dy * dy;
 
                 for dx in -(radius_i16)..=(radius_i16) {
@@ -258,11 +312,9 @@ impl Widget for MapWidget {
 
                     if in_cap || in_stem {
                         let px = (x as i16 + dx) as u16;
-                        let py = (y as i16 + dy) as u16;
 
-                        // Bounds check with early exit
-                        if px < area.x || px >= area.x + area.width ||
-                           py < area.y || py >= area.y + area.height {
+                        // Bounds check x-axis only (y already checked in outer loop)
+                        if px < area.x || px >= area.x + area.width {
                             continue;
                         }
 
