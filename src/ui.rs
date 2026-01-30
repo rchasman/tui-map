@@ -115,10 +115,19 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
         explosions.truncate(MAX_VISIBLE_EXPLOSIONS);
     }
 
-    // Convert fires to screen coordinates
-    // At low zoom: use O(1) fire grid (1° cells) - much faster for many fires
-    // At high zoom: use individual fires for detail
-    let mut fires: Vec<FireRender> = Vec::with_capacity(2000);
+    // Screen-space fire map: merge overlapping fires by tracking max intensity per cell
+    // This is O(1) lookup and avoids duplicate rendering
+    let fire_map_width = inner.width as usize;
+    let fire_map_height = inner.height as usize;
+    let mut fire_map: Vec<u8> = vec![0; fire_map_width * fire_map_height];
+
+    // Helper to merge fire into map (max intensity wins)
+    let mut add_fire = |cx: usize, cy: usize, intensity: u8| {
+        if cx < fire_map_width && cy < fire_map_height {
+            let idx = cy * fire_map_width + cx;
+            fire_map[idx] = fire_map[idx].max(intensity);
+        }
+    };
 
     // Degrees per terminal character - determines LOD threshold
     let deg_per_char = 360.0 / (viewport.zoom * inner.width as f64);
@@ -127,19 +136,13 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
     if use_grid {
         // O(1) grid-based rendering: iterate visible grid cells only
         for (lon, lat, intensity) in app.fire_grid.iter_fires() {
-            // Project grid cell center
             for &offset in &[0.0, -360.0, 360.0] {
                 let ((px, py), _) = viewport.project_wrapped(lon, lat, offset);
 
-                if px < 0 || py < 0 || px > 30000 || py > 30000 {
-                    continue;
-                }
-
-                let cx = (px / 2) as u16;
-                let cy = (py / 4) as u16;
-
-                if cx < inner.width && cy < inner.height {
-                    fires.push(FireRender { x: cx, y: cy, intensity });
+                if px >= 0 && py >= 0 && px < 30000 && py < 30000 {
+                    let cx = (px / 2) as usize;
+                    let cy = (py / 4) as usize;
+                    add_fire(cx, cy, intensity);
                     break;
                 }
             }
@@ -159,42 +162,44 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
             }
 
             // Fast viewport culling
-            let mut in_view = fire.lat >= min_lat && fire.lat <= max_lat;
-            if in_view {
-                in_view = (fire.lon >= min_lon && fire.lon <= max_lon) ||
-                          (fire.lon - 360.0 >= min_lon && fire.lon - 360.0 <= max_lon) ||
-                          (fire.lon + 360.0 >= min_lon && fire.lon + 360.0 <= max_lon);
+            let in_lat = fire.lat >= min_lat && fire.lat <= max_lat;
+            if !in_lat {
+                continue;
             }
-
-            if !in_view {
+            let in_lon = (fire.lon >= min_lon && fire.lon <= max_lon) ||
+                         (fire.lon - 360.0 >= min_lon && fire.lon - 360.0 <= max_lon) ||
+                         (fire.lon + 360.0 >= min_lon && fire.lon + 360.0 <= max_lon);
+            if !in_lon {
                 continue;
             }
 
             for &offset in &[0.0, -360.0, 360.0] {
                 let ((px, py), _) = viewport.project_wrapped(fire.lon, fire.lat, offset);
 
-                if px < 0 || py < 0 || px > 30000 || py > 30000 {
-                    continue;
-                }
-
-                let cx = (px / 2) as u16;
-                let cy = (py / 4) as u16;
-
-                if cx < inner.width && cy < inner.height {
-                    fires.push(FireRender { x: cx, y: cy, intensity: fire.intensity });
+                if px >= 0 && py >= 0 && px < 30000 && py < 30000 {
+                    let cx = (px / 2) as usize;
+                    let cy = (py / 4) as usize;
+                    add_fire(cx, cy, fire.intensity);
                     break;
                 }
             }
         }
-
-        // Limit individual fires to avoid slowdown
-        const MAX_VISIBLE_FIRES: usize = 2000;
-        if fires.len() > MAX_VISIBLE_FIRES {
-            let stride = fires.len() / MAX_VISIBLE_FIRES;
-            let sampled: Vec<FireRender> = fires.iter().step_by(stride).take(MAX_VISIBLE_FIRES).copied().collect();
-            fires = sampled;
-        }
     }
+
+    // Convert fire map to FireRender vec (only non-zero cells)
+    let fires: Vec<FireRender> = fire_map
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, &intensity)| {
+            if intensity > 0 {
+                let x = (idx % fire_map_width) as u16;
+                let y = (idx / fire_map_width) as u16;
+                Some(FireRender { x, y, intensity })
+            } else {
+                None
+            }
+        })
+        .collect();
 
     // Calculate blast radius for cursor reticle
     let cursor_blast_radius = if cursor_pos.is_some() {
