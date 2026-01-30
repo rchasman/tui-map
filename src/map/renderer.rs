@@ -176,21 +176,21 @@ impl MapRenderer {
     /// Get max number of cities to show based on zoom
     fn max_cities_for_zoom(zoom: f64) -> usize {
         if zoom > 20.0 {
-            500
+            800
         } else if zoom > 15.0 {
-            200
+            400
         } else if zoom > 10.0 {
-            100
+            200
         } else if zoom > 6.0 {
-            50
+            100
         } else if zoom > 4.0 {
-            30
+            60
         } else if zoom > 3.0 {
-            20
+            40
         } else if zoom > 2.0 {
-            15
+            30
         } else {
-            8
+            20
         }
     }
 
