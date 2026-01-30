@@ -336,8 +336,8 @@ impl Widget for MapWidget {
             };
             let max_r = exp.radius as f32 * progress;
 
-            // Mushroom cap rises and expands UPWARD
-            let cap_height = (max_r * (1.8 + (exp.frame as f32 / 60.0) * 0.8)) as i16;  // Extends very high
+            // Mushroom cap rises and expands UPWARD with massive roiling top
+            let cap_height = (max_r * (2.0 + (exp.frame as f32 / 60.0) * 1.2)) as i16;  // Extends VERY high
             let cap_width = max_r;
 
             // Animation phases - extended for dramatic impact
@@ -361,28 +361,41 @@ impl Widget for MapWidget {
                 for dx in -(radius_i16)..=(radius_i16) {
                     let dist_sq = (dx * dx + dy_sq) as f32;
 
-                    // Turbulent mushroom cap with chaotic asymmetry
+                    // Turbulent mushroom cap with MASSIVE chaotic roiling at top
                     let height_ratio = (-dy as f32) / cap_height as f32;  // 0.0 at base, 1.0 at top
 
-                    // Add turbulence - use position and time for chaotic variation
-                    let mut turb_seed = (dx as u64).wrapping_mul(2654435761)
-                                       + (dy as u64).wrapping_mul(2246822519)
-                                       + (self.frame + exp.frame as u64).wrapping_mul(1103515245);
-                    turb_seed ^= turb_seed << 13;
-                    turb_seed ^= turb_seed >> 7;
-                    turb_seed ^= turb_seed << 17;
-                    let turbulence = ((turb_seed & 0xFF) as f32 / 255.0) * 0.3;  // 0-30% variation
+                    // Multi-scale turbulence for organic chaos
+                    // Large-scale turbulence (wave-like bulges)
+                    let angle = (dx as f32).atan2(dy as f32);
+                    let mut large_turb_seed = ((angle * 1000.0) as u64).wrapping_mul(6364136223846793005)
+                                              + (self.frame / 5).wrapping_mul(1442695040888963407);
+                    large_turb_seed ^= large_turb_seed << 13;
+                    large_turb_seed ^= large_turb_seed >> 7;
+                    large_turb_seed ^= large_turb_seed << 17;
+                    let large_turbulence = ((large_turb_seed & 0xFF) as f32 / 255.0 - 0.5) * 0.6;  // -30% to +30%
 
-                    // Height-based width with turbulence
-                    let height_factor = if height_ratio < 0.25 {
-                        // Rising column (0-25% height) - narrow base with turbulence
-                        0.6 + height_ratio * 0.8 + turbulence
-                    } else if height_ratio < 0.6 {
-                        // Transition zone (25-60%) - expanding
-                        1.0 + (height_ratio - 0.25) * 0.6 + turbulence
+                    // Fine-scale turbulence (pixel-level chaos)
+                    let mut fine_turb_seed = (dx as u64).wrapping_mul(2654435761)
+                                           + (dy as u64).wrapping_mul(2246822519)
+                                           + (self.frame + exp.frame as u64).wrapping_mul(1103515245);
+                    fine_turb_seed ^= fine_turb_seed << 13;
+                    fine_turb_seed ^= fine_turb_seed >> 7;
+                    fine_turb_seed ^= fine_turb_seed << 17;
+                    let fine_turbulence = ((fine_turb_seed & 0xFF) as f32 / 255.0 - 0.5) * 0.4;  // -20% to +20%
+
+                    // Height-based width with MASSIVE roiling cap
+                    let height_factor = if height_ratio < 0.2 {
+                        // Rising column (0-20% height) - narrow chaotic base
+                        0.5 + height_ratio * 0.4 + fine_turbulence * 0.5
+                    } else if height_ratio < 0.5 {
+                        // Transition to cap (20-50%) - expanding rapidly
+                        0.9 + (height_ratio - 0.2) * 1.5 + large_turbulence * 0.7 + fine_turbulence * 0.3
+                    } else if height_ratio < 0.75 {
+                        // Lower cap (50-75%) - building massive bulges
+                        1.4 + (height_ratio - 0.5) * 2.0 + large_turbulence * 1.2 + fine_turbulence * 0.4
                     } else {
-                        // Mushroom cap (60-100%) - massive roiling top
-                        1.2 + (height_ratio - 0.6) * 1.5 + turbulence * 1.5  // Extra turbulence at top
+                        // ROILING TOP (75-100%) - MASSIVE chaotic billowing cap
+                        1.9 + (height_ratio - 0.75) * 2.5 + large_turbulence * 2.0 + fine_turbulence * 0.8
                     };
 
                     let effective_width_sq = (cap_width * height_factor) * (cap_width * height_factor);
