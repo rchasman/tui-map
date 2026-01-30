@@ -1,6 +1,7 @@
 use crate::braille::BrailleCanvas;
 use crate::map::geometry::draw_line;
 use crate::map::projection::Viewport;
+use crate::map::spatial::SpatialGrid;
 
 /// Rendered map layers with separate canvases for color differentiation
 pub struct MapLayers {
@@ -117,12 +118,14 @@ pub struct MapRenderer {
     pub borders_high: Vec<LineString>,
     pub states: Vec<LineString>,
     pub counties: Vec<LineString>,
-    pub cities: Vec<City>,
+    pub city_grid: SpatialGrid<City>,
     pub settings: DisplaySettings,
 }
 
 impl MapRenderer {
     pub fn new() -> Self {
+        // Use 10° cells: 36 columns x 18 rows = 648 cells for the world
+        // Good balance between memory and query performance
         Self {
             coastlines_low: Vec::new(),
             coastlines_medium: Vec::new(),
@@ -131,7 +134,7 @@ impl MapRenderer {
             borders_high: Vec::new(),
             states: Vec::new(),
             counties: Vec::new(),
-            cities: Vec::new(),
+            city_grid: SpatialGrid::new(10.0),
             settings: DisplaySettings::default(),
         }
     }
@@ -237,10 +240,37 @@ impl MapRenderer {
 
         // Collect cities for glyph rendering (viewport-aware filtering with wrapping)
         if self.settings.show_cities {
+            // Calculate viewport bounds in geographic coordinates
+            let vp_min_lon = viewport.center_lon - (180.0 / viewport.zoom);
+            let vp_max_lon = viewport.center_lon + (180.0 / viewport.zoom);
+            let vp_min_lat = (viewport.center_lat - (90.0 / viewport.zoom)).max(-85.0);
+            let vp_max_lat = (viewport.center_lat + (90.0 / viewport.zoom)).min(85.0);
+
+            // Query spatial grid for cities in viewport (with wrapping)
+            let mut candidate_indices = Vec::new();
+
+            // Normal query
+            candidate_indices.extend(
+                self.city_grid.query_bbox(vp_min_lon, vp_min_lat, vp_max_lon, vp_max_lat)
+            );
+
+            // Wrapped queries (handle date line crossing)
+            if vp_min_lon < -180.0 {
+                candidate_indices.extend(
+                    self.city_grid.query_bbox(vp_min_lon + 360.0, vp_min_lat, 180.0, vp_max_lat)
+                );
+            }
+            if vp_max_lon > 180.0 {
+                candidate_indices.extend(
+                    self.city_grid.query_bbox(-180.0, vp_min_lat, vp_max_lon - 360.0, vp_max_lat)
+                );
+            }
+
             // First, collect all visible cities with their screen positions
             // Try each city at 0°, +360°, and -360° longitude offsets
-            let mut visible_cities: Vec<(&City, u16, u16)> = self.cities
+            let mut visible_cities: Vec<(&City, u16, u16)> = candidate_indices
                 .iter()
+                .filter_map(|&idx| self.city_grid.get(idx))
                 .flat_map(|city| {
                     // Try normal position and wrapped positions
                     [0.0, -360.0, 360.0].iter().filter_map(move |&offset| {
@@ -409,7 +439,7 @@ impl MapRenderer {
 
     /// Add a city marker
     pub fn add_city(&mut self, lon: f64, lat: f64, name: &str, population: u64, is_capital: bool, is_megacity: bool) {
-        self.cities.push(City {
+        self.city_grid.insert(lon, lat, City {
             lon,
             lat,
             name: name.to_string(),

@@ -223,26 +223,34 @@ impl App {
 
     /// Apply blast damage to cities within radius
     fn apply_blast_damage(&mut self, lon: f64, lat: f64, radius_km: f64) {
-        for city in &mut self.map_renderer.cities {
-            // Skip dead cities early
-            if city.population == 0 {
-                continue;
-            }
+        // Convert radius to degrees (rough: 1 degree ≈ 111km at equator)
+        let radius_degrees = radius_km / 111.0;
 
-            let dist = fast_distance_km(lon, lat, city.lon, city.lat);
-            if dist < radius_km {
-                // Closer = more casualties (inverse square falloff)
-                let damage_ratio = 1.0 - (dist / radius_km).powi(2);
+        // Query spatial grid for cities in radius (O(1) lookup)
+        let candidate_indices = self.map_renderer.city_grid.query_radius(lon, lat, radius_degrees);
 
-                // Direct hit (within 20% of radius) = total destruction
-                let killed = if dist < radius_km * 0.2 {
-                    city.population // Everyone dies
-                } else {
-                    (city.population as f64 * damage_ratio * 0.9) as u64
-                };
+        for &idx in &candidate_indices {
+            if let Some(city) = self.map_renderer.city_grid.get_mut(idx) {
+                // Skip dead cities early
+                if city.population == 0 {
+                    continue;
+                }
 
-                city.population = city.population.saturating_sub(killed);
-                self.casualties += killed;
+                let dist = fast_distance_km(lon, lat, city.lon, city.lat);
+                if dist < radius_km {
+                    // Closer = more casualties (inverse square falloff)
+                    let damage_ratio = 1.0 - (dist / radius_km).powi(2);
+
+                    // Direct hit (within 20% of radius) = total destruction
+                    let killed = if dist < radius_km * 0.2 {
+                        city.population // Everyone dies
+                    } else {
+                        (city.population as f64 * damage_ratio * 0.9) as u64
+                    };
+
+                    city.population = city.population.saturating_sub(killed);
+                    self.casualties += killed;
+                }
             }
         }
     }
@@ -319,15 +327,23 @@ impl App {
 
     /// Apply ongoing damage (fire/fallout) - small percentage casualties
     fn apply_ongoing_damage(&mut self, lon: f64, lat: f64, radius_km: f64, rate: f64) {
-        for city in &mut self.map_renderer.cities {
-            if city.population == 0 {
-                continue;
-            }
-            let dist = fast_distance_km(lon, lat, city.lon, city.lat);
-            if dist < radius_km {
-                let damage = ((city.population as f64 * rate) as u64).max(1);
-                city.population = city.population.saturating_sub(damage);
-                self.casualties += damage;
+        // Convert radius to degrees (rough: 1 degree ≈ 111km at equator)
+        let radius_degrees = radius_km / 111.0;
+
+        // Query spatial grid for cities in radius (O(1) lookup)
+        let candidate_indices = self.map_renderer.city_grid.query_radius(lon, lat, radius_degrees);
+
+        for &idx in &candidate_indices {
+            if let Some(city) = self.map_renderer.city_grid.get_mut(idx) {
+                if city.population == 0 {
+                    continue;
+                }
+                let dist = fast_distance_km(lon, lat, city.lon, city.lat);
+                if dist < radius_km {
+                    let damage = ((city.population as f64 * rate) as u64).max(1);
+                    city.population = city.population.saturating_sub(damage);
+                    self.casualties += damage;
+                }
             }
         }
     }
