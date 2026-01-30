@@ -158,19 +158,19 @@ impl MapWidget {
 impl Widget for MapWidget {
     fn render(self, area: Rect, buf: &mut Buffer) {
         // Render layers from back to front:
-        // 1. Coastlines (Cyan - at back)
-        self.render_layer(&self.layers.coastlines, Color::Cyan, area, buf);
-
-        // 2. County borders (DarkGray)
+        // 1. County borders (DarkGray - at back)
         self.render_layer(&self.layers.counties, Color::DarkGray, area, buf);
 
-        // 3. Country borders (Yellow if states visible at this zoom, else Cyan)
+        // 2. Country borders (Yellow if states visible at this zoom, else Cyan)
         let states_visible = self.has_states && self.zoom >= 4.0;
         let border_color = if states_visible { Color::Yellow } else { Color::Cyan };
         self.render_layer(&self.layers.borders, border_color, area, buf);
 
-        // 4. State borders (Yellow - on top)
+        // 3. State borders (Yellow)
         self.render_layer(&self.layers.states, Color::Yellow, area, buf);
+
+        // 4. Coastlines (Cyan - on top of borders)
+        self.render_layer(&self.layers.coastlines, Color::Cyan, area, buf);
 
         // Then overlay city markers and labels
         let marker_style = Style::default().fg(Color::White);
