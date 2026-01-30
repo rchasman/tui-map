@@ -492,12 +492,15 @@ fn hash3(a: u64, b: u64, c: u64) -> u64 {
     seed
 }
 
-/// Fast deterministic random using xorshift - Carmack style
+/// Fast deterministic random using splitmix64 - handles small seeds properly
 #[inline(always)]
-fn rand_simple(mut seed: u64) -> f64 {
-    seed ^= seed << 13;
-    seed ^= seed >> 7;
-    seed ^= seed << 17;
-    // Upper bits have better distribution
-    (seed >> 32) as f64 / 4294967296.0
+fn rand_simple(seed: u64) -> f64 {
+    // Splitmix64: multiply by golden ratio to spread small seeds across full range
+    let mut x = seed.wrapping_mul(0x9e3779b97f4a7c15);
+    x ^= x >> 30;
+    x = x.wrapping_mul(0xbf58476d1ce4e5b9);
+    x ^= x >> 27;
+    x = x.wrapping_mul(0x94d049bb133111eb);
+    x ^= x >> 31;
+    (x >> 11) as f64 / 9007199254740992.0 // 2^53 for full f64 mantissa precision
 }
