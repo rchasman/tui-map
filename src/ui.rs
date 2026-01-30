@@ -356,7 +356,13 @@ impl Widget for MapWidget {
             }
         }
 
-        // Render fires with chaotic flickering RGB gradients
+        // Render fires with chaotic flickering RGB gradients and varied flame symbols
+        const FIRE_HOT: &[char] = &['█', '▓', '▓', '◥', '◤', '◣', '◢', '▲', '△', '♦'];
+        const FIRE_BRIGHT: &[char] = &['▓', '▒', '◥', '◤', '▲', '△', '∧', '╱', '╲', '^'];
+        const FIRE_MED: &[char] = &['▒', '░', '◥', '◢', '∧', '╱', '╲', '/', '\\', '^', '~', '≈'];
+        const FIRE_LOW: &[char] = &['░', '·', '.', '∙', ':', ';', ',', '`', '\'', '~'];
+        const FIRE_EMBER: &[char] = &['·', '.', '∙', ',', '`', '\'', '*', '°', '•', '∘'];
+
         for fire in &self.fires {
             let x = area.x + fire.x;
             let y = area.y + fire.y;
@@ -366,38 +372,28 @@ impl Widget for MapWidget {
                 let flicker = ((seed & 0x3F) as i16) - 32;  // -32 to +31 range
                 let visual_intensity = (fire.intensity as i16 + flicker).clamp(0, 255) as u8;
 
-                // RGB fire gradient: white (hottest) → yellow → orange → red → dark red
-                // More character variety for organic look
+                // Pick character from appropriate tier using different seed bits
+                let char_seed = (seed >> 12) as usize;
                 let (r, g, b, ch) = if visual_intensity > 230 {
-                    // Blinding white hot core
-                    (255, 255, 255, '█')
+                    (255, 255, 255, FIRE_HOT[char_seed % FIRE_HOT.len()])
                 } else if visual_intensity > 200 {
-                    // Brilliant white-yellow
-                    (255, 250, 180, if (seed >> 8) & 1 == 0 { '█' } else { '▓' })
+                    (255, 250, 180, FIRE_HOT[char_seed % FIRE_HOT.len()])
                 } else if visual_intensity > 170 {
-                    // Bright yellow flames
-                    (255, 230, 50, if (seed >> 9) & 1 == 0 { '▓' } else { '▒' })
+                    (255, 230, 50, FIRE_BRIGHT[char_seed % FIRE_BRIGHT.len()])
                 } else if visual_intensity > 140 {
-                    // Yellow-orange flames
-                    (255, 180, 20, '▓')
+                    (255, 180, 20, FIRE_BRIGHT[char_seed % FIRE_BRIGHT.len()])
                 } else if visual_intensity > 110 {
-                    // Orange flames
-                    (255, 120, 0, if (seed >> 10) & 1 == 0 { '▓' } else { '▒' })
+                    (255, 120, 0, FIRE_MED[char_seed % FIRE_MED.len()])
                 } else if visual_intensity > 80 {
-                    // Orange-red
-                    (255, 70, 0, '▒')
+                    (255, 70, 0, FIRE_MED[char_seed % FIRE_MED.len()])
                 } else if visual_intensity > 50 {
-                    // Red flames
-                    (230, 30, 0, '▒')
+                    (230, 30, 0, FIRE_LOW[char_seed % FIRE_LOW.len()])
                 } else if visual_intensity > 30 {
-                    // Dark red embers
-                    (180, 15, 0, '░')
+                    (180, 15, 0, FIRE_LOW[char_seed % FIRE_LOW.len()])
                 } else if visual_intensity > 15 {
-                    // Very dark embers
-                    (120, 10, 0, '░')
+                    (120, 10, 0, FIRE_EMBER[char_seed % FIRE_EMBER.len()])
                 } else {
-                    // Dying embers - almost invisible
-                    (80, 5, 0, '·')
+                    (80, 5, 0, FIRE_EMBER[char_seed % FIRE_EMBER.len()])
                 };
 
                 buf[(x, y)].set_char(ch).set_fg(Color::Rgb(r, g, b));
