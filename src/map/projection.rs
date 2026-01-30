@@ -55,7 +55,7 @@ impl Viewport {
 
     /// Zoom out by a factor
     pub fn zoom_out(&mut self) {
-        self.zoom = (self.zoom / 1.5).max(0.5);
+        self.zoom = (self.zoom / 1.5).max(1.0);
     }
 
     /// Zoom in towards a specific pixel location
@@ -74,7 +74,7 @@ impl Viewport {
         let (lon, lat) = self.unproject(px, py);
 
         // Apply the zoom
-        let new_zoom = (self.zoom * factor).clamp(0.5, 100.0);
+        let new_zoom = (self.zoom * factor).clamp(1.0, 100.0);
         self.zoom = new_zoom;
 
         // Calculate where that point would now project to
