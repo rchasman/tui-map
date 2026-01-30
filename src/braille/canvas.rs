@@ -26,25 +26,25 @@ impl BrailleCanvas {
     /// (0,2) (1,2)   bits: 0x04 0x20
     /// (0,3) (1,3)   bits: 0x40 0x80
     /// ```
+    #[inline(always)]
     pub fn set_pixel(&mut self, x: usize, y: usize) {
-        let cx = x / 2;
-        let cy = y / 4;
+        let cx = x >> 1;  // x / 2
+        let cy = y >> 2;  // y / 4
 
         if cx >= self.width || cy >= self.height {
             return;
         }
 
-        let bit = match (x % 2, y % 4) {
-            (0, 0) => 0x01,
-            (1, 0) => 0x08,
-            (0, 1) => 0x02,
-            (1, 1) => 0x10,
-            (0, 2) => 0x04,
-            (1, 2) => 0x20,
-            (0, 3) => 0x40,
-            (1, 3) => 0x80,
-            _ => 0,
+        // Bit manipulation formula instead of match - Carmack style
+        // Left col (x&1=0): bits 0,1,2,6 for y=0,1,2,3
+        // Right col (x&1=1): bits 3,4,5,7 for y=0,1,2,3
+        let y_mod = y & 3;
+        let bit_pos = if y_mod == 3 {
+            6 + (x & 1)  // y=3: bit 6 (left) or 7 (right)
+        } else {
+            y_mod + (x & 1) * 3  // y<3: 0,1,2 (left) or 3,4,5 (right)
         };
+        let bit = 1u8 << bit_pos;
 
         self.pixels[cy][cx] |= bit;
     }

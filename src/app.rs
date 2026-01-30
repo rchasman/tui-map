@@ -229,7 +229,7 @@ impl App {
                 continue;
             }
 
-            let dist = haversine_km(lon, lat, city.lon, city.lat);
+            let dist = fast_distance_km(lon, lat, city.lon, city.lat);
             if dist < radius_km {
                 // Closer = more casualties (inverse square falloff)
                 let damage_ratio = 1.0 - (dist / radius_km).powi(2);
@@ -323,7 +323,7 @@ impl App {
             if city.population == 0 {
                 continue;
             }
-            let dist = haversine_km(lon, lat, city.lon, city.lat);
+            let dist = fast_distance_km(lon, lat, city.lon, city.lat);
             if dist < radius_km {
                 let damage = ((city.population as f64 * rate) as u64).max(1);
                 city.population = city.population.saturating_sub(damage);
@@ -333,7 +333,28 @@ impl App {
     }
 }
 
-/// Haversine distance in kilometers
+/// Fast equirectangular distance approximation in kilometers
+/// Good for small distances (<1000km), avoids expensive trig
+#[inline(always)]
+fn fast_distance_km(lon1: f64, lat1: f64, lon2: f64, lat2: f64) -> f64 {
+    const R: f64 = 6371.0; // Earth radius in km
+    const DEG_TO_RAD: f64 = 0.017453292519943295; // π/180
+
+    let dlat = (lat2 - lat1) * DEG_TO_RAD;
+    let dlon = (lon2 - lon1) * DEG_TO_RAD;
+
+    // Use average latitude for longitude scaling - good enough for game physics
+    let lat_avg = (lat1 + lat2) * 0.5 * DEG_TO_RAD;
+    let cos_lat = lat_avg.cos();
+
+    let dx = dlon * cos_lat;
+    let dy = dlat;
+
+    R * (dx * dx + dy * dy).sqrt()
+}
+
+/// Haversine distance in kilometers (unused - kept for reference)
+#[allow(dead_code)]
 fn haversine_km(lon1: f64, lat1: f64, lon2: f64, lat2: f64) -> f64 {
     let r = 6371.0; // Earth radius in km
     let dlat = (lat2 - lat1).to_radians();
@@ -346,8 +367,12 @@ fn haversine_km(lon1: f64, lat1: f64, lon2: f64, lat2: f64) -> f64 {
     r * c
 }
 
-/// Simple deterministic random (hash-based)
-fn rand_simple(seed: u64) -> f64 {
-    let x = seed.wrapping_mul(0x5DEECE66D).wrapping_add(0xB);
-    ((x >> 16) & 0xFFFF) as f64 / 65536.0
+/// Fast deterministic random using xorshift - Carmack style
+#[inline(always)]
+fn rand_simple(mut seed: u64) -> f64 {
+    seed ^= seed << 13;
+    seed ^= seed >> 7;
+    seed ^= seed << 17;
+    // Upper bits have better distribution
+    (seed >> 32) as f64 / 4294967296.0
 }

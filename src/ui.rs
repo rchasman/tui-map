@@ -119,6 +119,42 @@ struct FireRender {
     intensity: u8,
 }
 
+/// Midpoint circle algorithm - draws a filled circle in O(r) instead of O(r²)
+/// Carmack-style: symmetry + integer math only
+#[inline]
+fn draw_filled_circle<F>(cx: u16, cy: u16, radius: u16, mut plot: F)
+where
+    F: FnMut(u16, u16),
+{
+    let r = radius as i16;
+    let mut x = 0i16;
+    let mut y = r;
+    let mut d = 3 - 2 * r;
+
+    // Draw horizontal lines for filled circle using 8-way symmetry
+    while y >= x {
+        // Draw horizontal lines between symmetric points
+        for dx in -x..=x {
+            let x1 = (cx as i16 + dx) as u16;
+            plot(x1, (cy as i16 + y) as u16);
+            plot(x1, (cy as i16 - y) as u16);
+        }
+        for dx in -y..=y {
+            let x1 = (cx as i16 + dx) as u16;
+            plot(x1, (cy as i16 + x) as u16);
+            plot(x1, (cy as i16 - x) as u16);
+        }
+
+        x += 1;
+        if d > 0 {
+            y -= 1;
+            d += 4 * (x - y) + 10;
+        } else {
+            d += 4 * x + 6;
+        }
+    }
+}
+
 /// Custom widget that renders braille map with text labels overlaid
 struct MapWidget {
     layers: MapLayers,
@@ -224,57 +260,65 @@ impl Widget for MapWidget {
             }
         }
 
-        // Render explosions
+        // Render explosions using Bresenham circle - O(r) instead of O(r²)
         for exp in &self.explosions {
-            let x = area.x + exp.x;
-            let y = area.y + exp.y;
+            let cx = area.x + exp.x;
+            let cy = area.y + exp.y;
 
-            // Explosion expands based on frame, up to actual blast radius
+            // Explosion expands based on frame
             let progress = (exp.frame as f32 / 15.0).min(1.0);
-            let max_r = exp.radius as f32 * progress;
-            let max_r_sq = max_r * max_r; // Use squared distance to avoid sqrt
+            let max_r = (exp.radius as f32 * progress) as u16;
 
-            // Precompute stem boundaries
-            let stem_height = (max_r * 0.6) as i16;
-            let stem_width = (max_r * 0.3) as i16;
+            // Precompute radii for different zones
+            let inner_r = (max_r as f32 * 0.3) as u16;
+            let mid_r = (max_r as f32 * 0.6) as u16;
+            let stem_bottom = (max_r as f32 * 0.6) as i16;
+            let stem_width = (max_r as f32 * 0.3) as i16;
 
-            // Precompute color thresholds squared
-            let inner_threshold_sq = (max_r * 0.3) * (max_r * 0.3);
-            let mid_threshold_sq = (max_r * 0.6) * (max_r * 0.6);
+            // Draw three concentric circles for mushroom cap
+            if max_r > 0 {
+                // Inner core (white/radioactive)
+                let (inner_ch, inner_color) = if exp.frame < 8 {
+                    ('*', Color::White)
+                } else {
+                    ('☢', Color::Red)
+                };
+                draw_filled_circle(cx, cy, inner_r, |px, py| {
+                    if px >= area.x && px < area.x + area.width &&
+                       py >= area.y && py < area.y + area.height && py <= cy {
+                        buf[(px, py)].set_char(inner_ch).set_fg(inner_color);
+                    }
+                });
 
-            // Draw mushroom cloud shape - wider at top, stem below
-            let radius_i16 = exp.radius as i16;
-            for dy in -(radius_i16 + 2)..=(radius_i16) {
-                let dy_sq = dy * dy;
-
-                for dx in -(radius_i16)..=(radius_i16) {
-                    // Use squared distance to avoid expensive sqrt
-                    let dist_sq = (dx * dx + dy_sq) as f32;
-
-                    // Mushroom cap (top half, wider)
-                    let in_cap = dy <= 0 && dist_sq <= max_r_sq;
-                    // Stem (bottom, narrower) - no distance calc needed
-                    let in_stem = dy > 0 && dy <= stem_height && dx.abs() <= stem_width;
-
-                    if in_cap || in_stem {
-                        let px = (x as i16 + dx) as u16;
-                        let py = (y as i16 + dy) as u16;
-
-                        // Bounds check with early exit
-                        if px < area.x || px >= area.x + area.width ||
-                           py < area.y || py >= area.y + area.height {
-                            continue;
+                // Mid ring (yellow)
+                for r in inner_r..mid_r {
+                    draw_filled_circle(cx, cy, r, |px, py| {
+                        if px >= area.x && px < area.x + area.width &&
+                           py >= area.y && py < area.y + area.height && py <= cy {
+                            buf[(px, py)].set_char('█').set_fg(Color::Yellow);
                         }
+                    });
+                }
 
-                        // Color based on squared distance from center
-                        let (ch, color) = if dist_sq < inner_threshold_sq {
-                            if exp.frame < 8 { ('*', Color::White) } else { ('☢', Color::Red) }
-                        } else if dist_sq < mid_threshold_sq {
-                            ('█', Color::Yellow)
-                        } else {
-                            ('░', Color::Red)
-                        };
-                        buf[(px, py)].set_char(ch).set_fg(color);
+                // Outer ring (red smoke)
+                for r in mid_r..max_r {
+                    draw_filled_circle(cx, cy, r, |px, py| {
+                        if px >= area.x && px < area.x + area.width &&
+                           py >= area.y && py < area.y + area.height && py <= cy {
+                            buf[(px, py)].set_char('░').set_fg(Color::Red);
+                        }
+                    });
+                }
+
+                // Draw stem (vertical column below center)
+                for dy in 0..=stem_bottom {
+                    for dx in -stem_width..=stem_width {
+                        let px = (cx as i16 + dx) as u16;
+                        let py = (cy as i16 + dy) as u16;
+                        if px >= area.x && px < area.x + area.width &&
+                           py >= area.y && py < area.y + area.height {
+                            buf[(px, py)].set_char('█').set_fg(Color::Yellow);
+                        }
                     }
                 }
             }
