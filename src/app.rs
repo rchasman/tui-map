@@ -224,6 +224,11 @@ impl App {
     /// Apply blast damage to cities within radius
     fn apply_blast_damage(&mut self, lon: f64, lat: f64, radius_km: f64) {
         for city in &mut self.map_renderer.cities {
+            // Skip dead cities early
+            if city.population == 0 {
+                continue;
+            }
+
             let dist = haversine_km(lon, lat, city.lon, city.lat);
             if dist < radius_km {
                 // Closer = more casualties (inverse square falloff)
@@ -255,15 +260,19 @@ impl App {
             // Decay intensity
             fire.intensity = fire.intensity.saturating_sub(1);
 
-            // Occasionally spread to nearby area
-            if fire.intensity > 100 && rand_simple((fire.lon * 1000.0) as u64 + fire.intensity as u64) > 0.95 {
-                let spread_dist = 0.1; // degrees
-                let angle = rand_simple((fire.lat * 1000.0) as u64) * std::f64::consts::TAU;
-                new_fires.push(Fire {
-                    lon: fire.lon + spread_dist * angle.cos(),
-                    lat: fire.lat + spread_dist * angle.sin(),
-                    intensity: fire.intensity.saturating_sub(20),
-                });
+            // Occasionally spread to nearby area (check less frequently when weak)
+            let should_check_spread = fire.intensity > 100;
+            if should_check_spread {
+                let rand_val = rand_simple((fire.lon * 1000.0) as u64 + fire.intensity as u64);
+                if rand_val > 0.95 {
+                    let spread_dist = 0.1; // degrees
+                    let angle = rand_simple((fire.lat * 1000.0) as u64) * std::f64::consts::TAU;
+                    new_fires.push(Fire {
+                        lon: fire.lon + spread_dist * angle.cos(),
+                        lat: fire.lat + spread_dist * angle.sin(),
+                        intensity: fire.intensity.saturating_sub(20),
+                    });
+                }
             }
 
             fire.intensity > 0
@@ -274,12 +283,17 @@ impl App {
             self.fires.extend(new_fires);
         }
 
-        // Collect damage zones from fires
+        // Collect damage zones from fires (only strong fires cause damage)
         let mut damage_zones = Vec::new();
         for fire in &self.fires {
             if fire.intensity > 50 {
                 damage_zones.push((fire.lon, fire.lat, 20.0, 0.001)); // 0.1% per frame
             }
+        }
+
+        // Early exit if no damage zones
+        if damage_zones.is_empty() && self.fallout.is_empty() {
+            return !self.explosions.is_empty();
         }
 
         // Update fallout - decay slowly

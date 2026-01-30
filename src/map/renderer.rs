@@ -241,12 +241,15 @@ impl MapRenderer {
             let mut visible_cities: Vec<(&City, u16, u16)> = self.cities
                 .iter()
                 .filter_map(|city| {
+                    // Quick bounds check before expensive projection
                     let (px, py) = viewport.project(city.lon, city.lat);
-                    if viewport.is_visible(px, py) && px >= 0 && py >= 0 {
-                        Some((city, (px / 2) as u16, (py / 4) as u16))
-                    } else {
-                        None
+
+                    // Early rejection: negative coords or out of bounds
+                    if px < 0 || py < 0 || !viewport.is_visible(px, py) {
+                        return None;
                     }
+
+                    Some((city, (px / 2) as u16, (py / 4) as u16))
                 })
                 .collect();
 

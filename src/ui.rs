@@ -232,33 +232,49 @@ impl Widget for MapWidget {
             // Explosion expands based on frame, up to actual blast radius
             let progress = (exp.frame as f32 / 15.0).min(1.0);
             let max_r = exp.radius as f32 * progress;
+            let max_r_sq = max_r * max_r; // Use squared distance to avoid sqrt
+
+            // Precompute stem boundaries
+            let stem_height = (max_r * 0.6) as i16;
+            let stem_width = (max_r * 0.3) as i16;
+
+            // Precompute color thresholds squared
+            let inner_threshold_sq = (max_r * 0.3) * (max_r * 0.3);
+            let mid_threshold_sq = (max_r * 0.6) * (max_r * 0.6);
 
             // Draw mushroom cloud shape - wider at top, stem below
-            for dy in -(exp.radius as i16 + 2)..=(exp.radius as i16) {
-                for dx in -(exp.radius as i16)..=(exp.radius as i16) {
-                    // Euclidean distance for circular shape
-                    let dist = ((dx * dx + dy * dy) as f32).sqrt();
+            let radius_i16 = exp.radius as i16;
+            for dy in -(radius_i16 + 2)..=(radius_i16) {
+                let dy_sq = dy * dy;
+
+                for dx in -(radius_i16)..=(radius_i16) {
+                    // Use squared distance to avoid expensive sqrt
+                    let dist_sq = (dx * dx + dy_sq) as f32;
 
                     // Mushroom cap (top half, wider)
-                    let in_cap = dy <= 0 && dist <= max_r;
-                    // Stem (bottom, narrower)
-                    let in_stem = dy > 0 && dy <= (max_r * 0.6) as i16 && dx.abs() <= (max_r * 0.3) as i16;
+                    let in_cap = dy <= 0 && dist_sq <= max_r_sq;
+                    // Stem (bottom, narrower) - no distance calc needed
+                    let in_stem = dy > 0 && dy <= stem_height && dx.abs() <= stem_width;
 
                     if in_cap || in_stem {
                         let px = (x as i16 + dx) as u16;
                         let py = (y as i16 + dy) as u16;
-                        if px >= area.x && px < area.x + area.width &&
-                           py >= area.y && py < area.y + area.height {
-                            // Color based on distance from center and frame
-                            let (ch, color) = if dist < max_r * 0.3 {
-                                if exp.frame < 8 { ('*', Color::White) } else { ('☢', Color::Red) }
-                            } else if dist < max_r * 0.6 {
-                                ('█', Color::Yellow)
-                            } else {
-                                ('░', Color::Red)
-                            };
-                            buf[(px, py)].set_char(ch).set_fg(color);
+
+                        // Bounds check with early exit
+                        if px < area.x || px >= area.x + area.width ||
+                           py < area.y || py >= area.y + area.height {
+                            continue;
                         }
+
+                        // Color based on squared distance from center
+                        let (ch, color) = if dist_sq < inner_threshold_sq {
+                            if exp.frame < 8 { ('*', Color::White) } else { ('☢', Color::Red) }
+                        } else if dist_sq < mid_threshold_sq {
+                            ('█', Color::Yellow)
+                        } else {
+                            ('░', Color::Red)
+                        };
+                        buf[(px, py)].set_char(ch).set_fg(color);
                     }
                 }
             }
