@@ -313,19 +313,29 @@ impl Widget for MapWidget {
             let x = area.x + exp.x;
             let y = area.y + exp.y;
 
-            // Explosion expands based on frame, up to actual blast radius
-            let progress = (exp.frame as f32 / 15.0).min(1.0);
+            // Explosion expands quickly then billows - multi-stage expansion
+            let progress = if exp.frame < 20 {
+                // Fast initial expansion (0-20 frames)
+                (exp.frame as f32 / 20.0).powf(0.7)
+            } else if exp.frame < 40 {
+                // Billowing expansion (20-40 frames) - slower, fuller
+                1.0 + ((exp.frame - 20) as f32 / 20.0) * 0.3
+            } else {
+                // Full mushroom cloud (40-60 frames)
+                1.3
+            };
             let max_r = exp.radius as f32 * progress;
             let max_r_sq = max_r * max_r;
 
-            // Precompute stem boundaries
-            let stem_height = (max_r * 0.6) as i16;
+            // Precompute stem boundaries - stem grows taller over time
+            let stem_height = (max_r * (0.6 + (exp.frame as f32 / 60.0) * 0.4)) as i16;
             let stem_width = (max_r * 0.3) as i16;
 
-            // Animation phases
-            let flash_phase = exp.frame < 3;     // Initial white flash
-            let fireball_phase = exp.frame < 8;  // Bright fireball
-            let cooling_phase = exp.frame < 15;  // Cooling smoke
+            // Animation phases - extended for dramatic impact
+            let flash_phase = exp.frame < 8;      // Extended white-hot flash (8 frames)
+            let fireball_phase = exp.frame < 25;  // Long bright fireball phase (17 frames)
+            let cooling_phase = exp.frame < 45;   // Extended cooling/billowing (20 frames)
+            // Final smoke phase: 45-60 frames
 
             // Draw mushroom cloud shape
             let radius_i16 = exp.radius as i16;
@@ -371,41 +381,79 @@ impl Widget for MapWidget {
 
                         // RGB gradient with phase-based coloring
                         let (r, g, b, ch) = if flash_phase {
-                            // Initial flash: white hot
-                            if dist_norm < 0.5 {
+                            // Extended flash phase: blinding white hot core
+                            if dist_norm < 0.4 {
+                                // Intense white core with slight blue tint (hotter than white)
                                 (255, 255, 255, '█')
+                            } else if dist_norm < 0.7 {
+                                // Brilliant white-yellow transition
+                                (255, 250, 220, '█')
                             } else {
-                                (255, 240, 200, '▓')
+                                // Bright yellow outer flash
+                                (255, 240, 150, '▓')
                             }
                         } else if fireball_phase {
-                            // Fireball: center white → yellow → orange → red
-                            if dist_norm < 0.2 {
-                                (255, 255, 240, '█')  // White core
+                            // Extended fireball: dramatic center white → yellow → orange → red
+                            let phase_progress = (exp.frame - 8) as f32 / 17.0;  // 0.0 to 1.0 over fireball phase
+
+                            // Core stays white-hot longer then transitions
+                            let core_threshold = 0.3 - (phase_progress * 0.15);
+
+                            if dist_norm < core_threshold {
+                                // White-hot core that slowly shrinks
+                                (255, 255, 250, '█')
                             } else if dist_norm < 0.4 {
-                                (255, 250, 100, '▓')  // Bright yellow
+                                // Bright yellow - transitions to orange over time
+                                let r = 255;
+                                let g = (250.0 - phase_progress * 70.0) as u8;
+                                let b = (120.0 - phase_progress * 100.0) as u8;
+                                (r, g, b, '▓')
                             } else if dist_norm < 0.6 {
-                                (255, 180, 20, '▓')   // Orange
+                                // Orange - gets redder over time
+                                let r = 255;
+                                let g = (180.0 - phase_progress * 100.0) as u8;
+                                let b = (20.0 * (1.0 - phase_progress)) as u8;
+                                (r, g, b, '▓')
                             } else if dist_norm < 0.8 {
-                                (255, 80, 0, '▒')     // Red-orange
+                                // Red-orange outer region
+                                (255, 80, 0, '▒')
                             } else {
-                                (200, 40, 0, '░')     // Dark red smoke
+                                // Dark red billowing smoke
+                                (200, 40, 0, '░')
                             }
                         } else if cooling_phase {
-                            // Cooling: orange/red → dark smoke with radioactive core
+                            // Extended cooling: billowing orange/red → dark smoke with radioactive core
+                            let cooling_progress = (exp.frame - 25) as f32 / 20.0;  // 0.0 to 1.0
+
                             if dist_norm < 0.15 {
-                                // Radioactive core
-                                let pulse = if exp.frame % 2 == 0 { 30 } else { 0 };
+                                // Pulsing radioactive core
+                                let pulse_cycle = (exp.frame / 3) % 2;
+                                let pulse = if pulse_cycle == 0 { 60 } else { 20 };
                                 (255, pulse, 30, '☢')
                             } else if dist_norm < 0.4 {
-                                (220 - (flicker * 40.0) as u8, 60, 0, '▓')  // Flickering orange
+                                // Flickering orange that darkens over time
+                                let base = 220.0 - (cooling_progress * 80.0);
+                                let r = (base - flicker * 40.0) as u8;
+                                let g = (60.0 - cooling_progress * 20.0) as u8;
+                                (r, g, 0, '▓')
                             } else if dist_norm < 0.7 {
-                                (160, 40, 0, '▒')     // Dark orange
+                                // Dark orange transitioning to brown
+                                let r = (160.0 - cooling_progress * 50.0) as u8;
+                                let g = (40.0 - cooling_progress * 20.0) as u8;
+                                (r, g, 0, '▒')
                             } else {
-                                (100, 20, 0, '░')     // Brown smoke
+                                // Brown smoke billowing outward
+                                let r = (100.0 - cooling_progress * 20.0) as u8;
+                                let g = (20.0 - cooling_progress * 10.0) as u8;
+                                (r, g, 0, '░')
                             }
                         } else {
-                            // Final phase: dark smoke
-                            (80, 15, 0, '░')
+                            // Final phase: dark dissipating smoke
+                            let final_progress = (exp.frame - 45) as f32 / 15.0;
+                            let r = (80.0 - final_progress * 30.0) as u8;
+                            let g = (15.0 - final_progress * 10.0) as u8;
+                            let alpha = if dist_norm > 0.5 { '░' } else { '▒' };
+                            (r, g, 0, alpha)
                         };
 
                         buf[(px, py)].set_char(ch).set_fg(Color::Rgb(r, g, b));
@@ -413,23 +461,28 @@ impl Widget for MapWidget {
                 }
             }
 
-            // Add expanding shockwave ring (first few frames only)
-            if exp.frame < 6 {
-                let ring_radius = (exp.frame as f32 * max_r / 5.0) as i16;
+            // Add expanding shockwave ring (first 12 frames)
+            if exp.frame < 12 {
+                let ring_radius = (exp.frame as f32 * max_r / 3.0) as i16;
+                let ring_thickness = if exp.frame < 6 { 2 } else { 1 };
 
-                for angle_step in 0..24 {
-                    let angle = (angle_step as f32 / 24.0) * std::f32::consts::TAU;
-                    let ring_x = (x as i16 + (ring_radius as f32 * angle.cos()) as i16) as u16;
-                    let ring_y = (y as i16 + (ring_radius as f32 * angle.sin()) as i16) as u16;
+                for t in 0..ring_thickness {
+                    for angle_step in 0..32 {
+                        let angle = (angle_step as f32 / 32.0) * std::f32::consts::TAU;
+                        let r = ring_radius + t;
+                        let ring_x = (x as i16 + (r as f32 * angle.cos()) as i16) as u16;
+                        let ring_y = (y as i16 + (r as f32 * angle.sin()) as i16) as u16;
 
-                    if ring_x >= area.x && ring_x < area.x + area.width &&
-                       ring_y >= area.y && ring_y < area.y + area.height {
-                        // Shockwave: bright yellow-white
-                        let fade = 1.0 - (exp.frame as f32 / 6.0);
-                        let r = (255.0 * fade) as u8;
-                        let g = (240.0 * fade) as u8;
-                        let b = (200.0 * fade) as u8;
-                        buf[(ring_x, ring_y)].set_char('○').set_fg(Color::Rgb(r, g, b));
+                        if ring_x >= area.x && ring_x < area.x + area.width &&
+                           ring_y >= area.y && ring_y < area.y + area.height {
+                            // Shockwave: bright yellow-white with slower fade
+                            let fade = 1.0 - (exp.frame as f32 / 12.0);
+                            let r = (255.0 * fade) as u8;
+                            let g = (240.0 * fade) as u8;
+                            let b = (200.0 * fade) as u8;
+                            let ch = if exp.frame < 4 { '◉' } else { '○' };
+                            buf[(ring_x, ring_y)].set_char(ch).set_fg(Color::Rgb(r, g, b));
+                        }
                     }
                 }
             }

@@ -279,7 +279,7 @@ impl App {
 
         self.explosions.retain_mut(|exp| {
             exp.frame += 1;
-            exp.frame < 20 // Animation lasts 20 frames
+            exp.frame < 60 // Animation lasts 60 frames (~1 second at 60fps)
         });
 
         // Update fires - decay and occasionally spread
