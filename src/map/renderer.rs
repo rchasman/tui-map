@@ -258,16 +258,39 @@ struct RenderCache {
     counties: BrailleCanvas,
 }
 
-/// Fast land/water lookup grid (1° resolution = 360x180 = 64,800 cells)
-/// Each cell is true if majority of cell is land
+/// Fast land/water lookup grid (0.1° resolution = 3600x1800 = 6.48M cells)
+/// Uses bitmap for memory efficiency (~810KB instead of 6.48MB)
+/// 0.1° ≈ 11km accuracy at equator - much better for coastlines
 pub struct LandGrid {
-    cells: Vec<bool>,
+    bitmap: Vec<u64>,
 }
 
 impl LandGrid {
+    const WIDTH: usize = 3600;  // 360° / 0.1°
+    const HEIGHT: usize = 1800; // 180° / 0.1°
+    const RESOLUTION: f64 = 0.1;
+    const TOTAL_BITS: usize = Self::WIDTH * Self::HEIGHT; // 6,480,000
+    const BITMAP_LEN: usize = (Self::TOTAL_BITS + 63) / 64; // 101,250 u64s = 810KB
+
     pub fn new() -> Self {
         Self {
-            cells: vec![false; 360 * 180], // 64,800 cells
+            bitmap: vec![0u64; Self::BITMAP_LEN],
+        }
+    }
+
+    #[inline(always)]
+    fn set_bit(&mut self, idx: usize) {
+        if idx < Self::TOTAL_BITS {
+            self.bitmap[idx / 64] |= 1u64 << (idx % 64);
+        }
+    }
+
+    #[inline(always)]
+    fn get_bit(&self, idx: usize) -> bool {
+        if idx < Self::TOTAL_BITS {
+            (self.bitmap[idx / 64] >> (idx % 64)) & 1 == 1
+        } else {
+            false
         }
     }
 
@@ -275,18 +298,26 @@ impl LandGrid {
     pub fn from_polygons(polygons: &[Polygon]) -> Self {
         let mut grid = Self::new();
 
-        // Check each 1° cell
-        for lat_idx in 0..180 {
-            for lon_idx in 0..360 {
-                let lon = -180.0 + lon_idx as f64 + 0.5; // Cell center
-                let lat = -90.0 + lat_idx as f64 + 0.5;
+        // Process each polygon and fill its cells (bbox-optimized)
+        for polygon in polygons {
+            let (min_lon, min_lat, max_lon, max_lat) = polygon.bbox;
 
-                // Check if cell center is in any polygon
-                for polygon in polygons {
+            // Convert bbox to grid indices (with padding for edge cases)
+            let lon_start = (((min_lon + 180.0) / Self::RESOLUTION).floor() as usize).saturating_sub(1);
+            let lon_end = (((max_lon + 180.0) / Self::RESOLUTION).ceil() as usize + 1).min(Self::WIDTH);
+            let lat_start = (((min_lat + 90.0) / Self::RESOLUTION).floor() as usize).saturating_sub(1);
+            let lat_end = (((max_lat + 90.0) / Self::RESOLUTION).ceil() as usize + 1).min(Self::HEIGHT);
+
+            // Only check cells within polygon's bounding box
+            for lat_idx in lat_start..lat_end {
+                let lat = -90.0 + (lat_idx as f64 + 0.5) * Self::RESOLUTION;
+
+                for lon_idx in lon_start..lon_end {
+                    let lon = -180.0 + (lon_idx as f64 + 0.5) * Self::RESOLUTION;
+
                     if polygon.contains(lon, lat) {
-                        let idx = lat_idx * 360 + lon_idx;
-                        grid.cells[idx] = true;
-                        break;
+                        let idx = lat_idx * Self::WIDTH + lon_idx;
+                        grid.set_bit(idx);
                     }
                 }
             }
@@ -298,12 +329,12 @@ impl LandGrid {
     /// Fast O(1) land check
     #[inline(always)]
     pub fn is_land(&self, lon: f64, lat: f64) -> bool {
-        // Normalize coordinates
-        let lon = ((lon + 180.0).rem_euclid(360.0)) as usize;
-        let lat = ((lat + 90.0).clamp(0.0, 179.999)) as usize;
+        // Convert to grid coordinates (0.1° resolution)
+        let lon_idx = (((lon + 180.0).rem_euclid(360.0)) / Self::RESOLUTION) as usize;
+        let lat_idx = (((lat + 90.0).clamp(0.0, 179.999)) / Self::RESOLUTION) as usize;
 
-        let idx = lat * 360 + lon;
-        self.cells.get(idx).copied().unwrap_or(false)
+        let idx = lat_idx.min(Self::HEIGHT - 1) * Self::WIDTH + lon_idx.min(Self::WIDTH - 1);
+        self.get_bit(idx)
     }
 }
 
