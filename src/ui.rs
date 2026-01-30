@@ -141,44 +141,17 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
         fires.truncate(MAX_VISIBLE_FIRES);
     }
 
-    // Convert debris to screen coordinates with culling and wrapping
-    let mut debris_particles: Vec<DebrisRender> = Vec::new();
-    for particle in &app.debris {
-        // Try normal position and wrapped positions
-        for &offset in &[0.0, -360.0, 360.0] {
-            let ((px, py), _) = viewport.project_wrapped(particle.lon, particle.lat, offset);
-
-            // Early rejection: negative coords or out of bounds
-            if px < 0 || py < 0 {
-                continue;
-            }
-
-            let cx = (px / 2) as u16;
-            let cy = (py / 4) as u16;
-
-            if cx < inner.width && cy < inner.height {
-                debris_particles.push(DebrisRender { x: cx, y: cy, life: particle.life });
-            }
-        }
-    }
-
-    // Limit debris
-    const MAX_VISIBLE_DEBRIS: usize = 300;
-    if debris_particles.len() > MAX_VISIBLE_DEBRIS {
-        debris_particles.truncate(MAX_VISIBLE_DEBRIS);
-    }
-
     // Render braille map
     let map_widget = MapWidget {
         layers,
         cursor_pos,
         explosions,
         fires,
-        debris: debris_particles,
         has_states: app.map_renderer.settings.show_states,
         zoom: viewport.zoom,
         inner_width: inner.width,
         inner_height: inner.height,
+        frame: app.frame,
     };
     frame.render_widget(map_widget, inner);
 }
@@ -198,24 +171,17 @@ struct FireRender {
     intensity: u8,
 }
 
-/// A debris particle to render
-struct DebrisRender {
-    x: u16,
-    y: u16,
-    life: u8,
-}
-
 /// Custom widget that renders braille map with text labels overlaid
 struct MapWidget {
     layers: MapLayers,
     cursor_pos: Option<(u16, u16)>,
     explosions: Vec<ExplosionRender>,
     fires: Vec<FireRender>,
-    debris: Vec<DebrisRender>,
     has_states: bool,
     zoom: f64,
     inner_width: u16,
     inner_height: u16,
+    frame: u64,
 }
 
 impl MapWidget {
@@ -300,40 +266,19 @@ impl Widget for MapWidget {
             }
         }
 
-        // Render debris particles
-        for particle in &self.debris {
-            let x = area.x + particle.x;
-            let y = area.y + particle.y;
-            if x < area.x + area.width && y < area.y + area.height {
-                // Debris fades as it loses life
-                let fade = (particle.life as f32 / 50.0).min(1.0);
-                let r = (180.0 * fade) as u8;
-                let g = (160.0 * fade) as u8;
-                let b = (140.0 * fade) as u8;
-
-                // Different characters based on remaining life
-                let ch = if particle.life > 40 {
-                    '▪'  // Solid block
-                } else if particle.life > 25 {
-                    '•'  // Bullet
-                } else if particle.life > 10 {
-                    '·'  // Small dot
-                } else {
-                    ','  // Tiny speck
-                };
-
-                buf[(x, y)].set_char(ch).set_fg(Color::Rgb(r, g, b));
-            }
-        }
-
-        // Render fires with flickering RGB gradients
+        // Render fires with chaotic flickering RGB gradients
         for fire in &self.fires {
             let x = area.x + fire.x;
             let y = area.y + fire.y;
             if x < area.x + area.width && y < area.y + area.height {
-                // Flickering: add pseudo-random variation to intensity
-                let flicker = ((fire.x as u32 * 97 + fire.y as u32 * 31) % 20) as u8;
-                let visual_intensity = fire.intensity.saturating_add(flicker).saturating_sub(10);
+                // Chaotic flickering: combine position, intensity, and frame for randomness
+                // Use xorshift-style hash to break spatial patterns
+                let mut seed = (fire.x as u64) * 2654435761 + (fire.y as u64) * 2246822519 + self.frame;
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                let flicker = ((seed & 0x3F) as i16) - 32;  // -32 to +31 range
+                let visual_intensity = (fire.intensity as i16 + flicker).clamp(0, 255) as u8;
 
                 // RGB fire gradient: white (hottest) → yellow → orange → red → dark red
                 let (r, g, b, ch) = if visual_intensity > 220 {
@@ -417,8 +362,12 @@ impl Widget for MapWidget {
                             (dist_sq.sqrt() / max_r).min(1.0)
                         };
 
-                        // Flickering based on position (deterministic)
-                        let flicker = ((px as u32 * 97 + py as u32 * 31 + exp.frame as u32 * 13) % 20) as f32 / 20.0;
+                        // Chaotic flickering for explosion
+                        let mut seed = (px as u64) * 2654435761 + (py as u64) * 2246822519 + (self.frame + exp.frame as u64) * 1103515245;
+                        seed ^= seed << 13;
+                        seed ^= seed >> 7;
+                        seed ^= seed << 17;
+                        let flicker = ((seed & 0xFF) as f32) / 255.0;
 
                         // RGB gradient with phase-based coloring
                         let (r, g, b, ch) = if flash_phase {
