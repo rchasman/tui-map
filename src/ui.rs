@@ -325,11 +325,14 @@ impl Widget for MapWidget {
                 1.3
             };
             let max_r = exp.radius as f32 * progress;
-            let max_r_sq = max_r * max_r;
 
-            // Precompute stem boundaries - stem grows taller over time
-            let stem_height = (max_r * (0.6 + (exp.frame as f32 / 60.0) * 0.4)) as i16;
-            let stem_width = (max_r * 0.3) as i16;
+            // Mushroom cap rises and expands UPWARD
+            let cap_height = (max_r * (1.5 + (exp.frame as f32 / 60.0) * 0.5)) as i16;  // Extends high above
+            let cap_width = max_r;
+
+            // Stem is thin column below - stays small
+            let stem_height = (max_r * 0.4) as i16;  // Short stem
+            let stem_width = (max_r * 0.2) as i16;   // Narrow stem
 
             // Animation phases - extended for dramatic impact
             let flash_phase = exp.frame < 8;      // Extended white-hot flash (8 frames)
@@ -337,9 +340,9 @@ impl Widget for MapWidget {
             let cooling_phase = exp.frame < 45;   // Extended cooling/billowing (20 frames)
             // Final smoke phase: 45-60 frames
 
-            // Draw mushroom cloud shape
+            // Draw mushroom cloud - CAP rises UPWARD, stem trails down
             let radius_i16 = exp.radius as i16;
-            for dy in -(radius_i16 + 2)..=(radius_i16) {
+            for dy in -cap_height..=stem_height {
                 let py = (y as i16 + dy) as u16;
 
                 // Skip entire row if off-screen
@@ -352,10 +355,29 @@ impl Widget for MapWidget {
                 for dx in -(radius_i16)..=(radius_i16) {
                     let dist_sq = (dx * dx + dy_sq) as f32;
 
-                    // Mushroom cap (top half, wider)
-                    let in_cap = dy <= 0 && dist_sq <= max_r_sq;
-                    // Stem (bottom, narrower)
-                    let in_stem = dy > 0 && dy <= stem_height && dx.abs() <= stem_width;
+                    // Mushroom cap billows UPWARD and OUTWARD
+                    // Higher up = wider (creates mushroom dome shape)
+                    let height_factor = if dy < 0 {
+                        // Above center - cap region
+                        let height_ratio = (-dy as f32) / cap_height as f32;  // 0.0 at center, 1.0 at top
+                        // Cap is widest at top third, narrower at base
+                        if height_ratio < 0.3 {
+                            // Base of cap (near blast) - medium width
+                            0.8 + height_ratio
+                        } else {
+                            // Upper cap - expands dramatically
+                            1.0 + (height_ratio - 0.3) * 0.8
+                        }
+                    } else {
+                        // Below center - stem region
+                        0.2  // Very narrow
+                    };
+
+                    let effective_width_sq = (cap_width * height_factor) * (cap_width * height_factor);
+                    let in_cap = dy < 0 && dist_sq <= effective_width_sq;
+
+                    // Stem is thin column below center
+                    let in_stem = dy >= 0 && dy <= stem_height && dx.abs() <= stem_width;
 
                     if in_cap || in_stem {
                         let px = (x as i16 + dx) as u16;
@@ -365,11 +387,20 @@ impl Widget for MapWidget {
                             continue;
                         }
 
-                        // Calculate normalized distance from center (0.0 = center, 1.0 = edge)
+                        // Calculate normalized distance - considers BOTH radial and vertical position
+                        // Hottest at base of cap, cooler at top and edges
                         let dist_norm = if in_stem {
-                            (dx.abs() as f32 / stem_width.max(1) as f32).min(1.0)
+                            // Stem is dimmer smoke
+                            0.9
                         } else {
-                            (dist_sq.sqrt() / max_r).min(1.0)
+                            // Cap: combine radial distance with vertical position
+                            let radial_dist = dist_sq.sqrt() / (cap_width * height_factor);
+                            let vertical_factor = (-dy as f32) / cap_height as f32;  // 0.0 at center, 1.0 at top
+
+                            // Hottest at BASE of cap (vertical_factor near 0), cooler at top
+                            // Also cooler at edges (radial_dist near 1)
+                            let heat = radial_dist * 0.6 + vertical_factor * 0.4;
+                            heat.min(1.0)
                         };
 
                         // Chaotic flickering for explosion
@@ -380,7 +411,7 @@ impl Widget for MapWidget {
                         let flicker = ((seed & 0xFF) as f32) / 255.0;
 
                         // RGB gradient with phase-based coloring
-                        let (r, g, b, ch) = if flash_phase {
+                        let (mut r, mut g, mut b, mut ch) = if flash_phase {
                             // Extended flash phase: blinding white hot core
                             if dist_norm < 0.4 {
                                 // Intense white core with slight blue tint (hotter than white)
@@ -455,6 +486,16 @@ impl Widget for MapWidget {
                             let alpha = if dist_norm > 0.5 { '░' } else { '▒' };
                             (r, g, 0, alpha)
                         };
+
+                        // Stem override: make it darker/less prominent (just smoke column)
+                        if in_stem {
+                            // Stem is always dark gray smoke, not bright
+                            let stem_factor = (dy as f32 / stem_height as f32).max(0.0);
+                            r = (60.0 + stem_factor * 40.0) as u8;
+                            g = (30.0 + stem_factor * 20.0) as u8;
+                            b = 10;
+                            ch = '░';
+                        }
 
                         buf[(px, py)].set_char(ch).set_fg(Color::Rgb(r, g, b));
                     }
