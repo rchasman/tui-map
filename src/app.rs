@@ -352,8 +352,10 @@ impl App {
                     let num_spreads = if rand_simple(hash3(lat_bits, lon_bits, self.frame)) > 0.7 { 2 } else { 1 };
 
                     for s in 0..num_spreads {
-                        let spread_dist = 0.04 + rand_simple(hash3(lat_bits, lon_bits, s as u64)) * 0.12;
-                        let angle = rand_simple(hash3(lon_bits, lat_bits, (s as u64).wrapping_add(9999))) * std::f64::consts::TAU;
+                        // Include frame so each spread event goes a different direction
+                        let spread_seed = hash3(lon_bits, lat_bits, self.frame.wrapping_add(s as u64));
+                        let spread_dist = 0.03 + rand_simple(spread_seed) * 0.15;
+                        let angle = rand_simple(spread_seed.wrapping_mul(31337)) * std::f64::consts::TAU;
 
                         let new_lon = fire.lon + spread_dist * angle.cos();
                         let new_lat = fire.lat + spread_dist * angle.sin();
