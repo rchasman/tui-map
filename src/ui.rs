@@ -327,12 +327,8 @@ impl Widget for MapWidget {
             let max_r = exp.radius as f32 * progress;
 
             // Mushroom cap rises and expands UPWARD
-            let cap_height = (max_r * (1.5 + (exp.frame as f32 / 60.0) * 0.5)) as i16;  // Extends high above
+            let cap_height = (max_r * (1.8 + (exp.frame as f32 / 60.0) * 0.8)) as i16;  // Extends very high
             let cap_width = max_r;
-
-            // Stem is thin column below - stays small
-            let stem_height = (max_r * 0.4) as i16;  // Short stem
-            let stem_width = (max_r * 0.2) as i16;   // Narrow stem
 
             // Animation phases - extended for dramatic impact
             let flash_phase = exp.frame < 8;      // Extended white-hot flash (8 frames)
@@ -340,9 +336,9 @@ impl Widget for MapWidget {
             let cooling_phase = exp.frame < 45;   // Extended cooling/billowing (20 frames)
             // Final smoke phase: 45-60 frames
 
-            // Draw mushroom cloud - CAP rises UPWARD, stem trails down
+            // Draw mushroom cloud - ONLY UPWARD, nothing below cursor
             let radius_i16 = exp.radius as i16;
-            for dy in -cap_height..=stem_height {
+            for dy in -cap_height..0 {
                 let py = (y as i16 + dy) as u16;
 
                 // Skip entire row if off-screen
@@ -355,31 +351,34 @@ impl Widget for MapWidget {
                 for dx in -(radius_i16)..=(radius_i16) {
                     let dist_sq = (dx * dx + dy_sq) as f32;
 
-                    // Mushroom cap billows UPWARD and OUTWARD
-                    // Higher up = wider (creates mushroom dome shape)
-                    let height_factor = if dy < 0 {
-                        // Above center - cap region
-                        let height_ratio = (-dy as f32) / cap_height as f32;  // 0.0 at center, 1.0 at top
-                        // Cap is widest at top third, narrower at base
-                        if height_ratio < 0.3 {
-                            // Base of cap (near blast) - medium width
-                            0.8 + height_ratio
-                        } else {
-                            // Upper cap - expands dramatically
-                            1.0 + (height_ratio - 0.3) * 0.8
-                        }
+                    // Turbulent mushroom cap with chaotic asymmetry
+                    let height_ratio = (-dy as f32) / cap_height as f32;  // 0.0 at base, 1.0 at top
+
+                    // Add turbulence - use position and time for chaotic variation
+                    let mut turb_seed = (dx as u64).wrapping_mul(2654435761)
+                                       + (dy as u64).wrapping_mul(2246822519)
+                                       + (self.frame + exp.frame as u64).wrapping_mul(1103515245);
+                    turb_seed ^= turb_seed << 13;
+                    turb_seed ^= turb_seed >> 7;
+                    turb_seed ^= turb_seed << 17;
+                    let turbulence = ((turb_seed & 0xFF) as f32 / 255.0) * 0.3;  // 0-30% variation
+
+                    // Height-based width with turbulence
+                    let height_factor = if height_ratio < 0.25 {
+                        // Rising column (0-25% height) - narrow base with turbulence
+                        0.6 + height_ratio * 0.8 + turbulence
+                    } else if height_ratio < 0.6 {
+                        // Transition zone (25-60%) - expanding
+                        1.0 + (height_ratio - 0.25) * 0.6 + turbulence
                     } else {
-                        // Below center - stem region
-                        0.2  // Very narrow
+                        // Mushroom cap (60-100%) - massive roiling top
+                        1.2 + (height_ratio - 0.6) * 1.5 + turbulence * 1.5  // Extra turbulence at top
                     };
 
                     let effective_width_sq = (cap_width * height_factor) * (cap_width * height_factor);
-                    let in_cap = dy < 0 && dist_sq <= effective_width_sq;
+                    let in_cloud = dist_sq <= effective_width_sq;
 
-                    // Stem is thin column below center
-                    let in_stem = dy >= 0 && dy <= stem_height && dx.abs() <= stem_width;
-
-                    if in_cap || in_stem {
+                    if in_cloud {
                         let px = (x as i16 + dx) as u16;
 
                         // Bounds check x-axis only
@@ -387,21 +386,13 @@ impl Widget for MapWidget {
                             continue;
                         }
 
-                        // Calculate normalized distance - considers BOTH radial and vertical position
-                        // Hottest at base of cap, cooler at top and edges
-                        let dist_norm = if in_stem {
-                            // Stem is dimmer smoke
-                            0.9
-                        } else {
-                            // Cap: combine radial distance with vertical position
-                            let radial_dist = dist_sq.sqrt() / (cap_width * height_factor);
-                            let vertical_factor = (-dy as f32) / cap_height as f32;  // 0.0 at center, 1.0 at top
+                        // Calculate heat - combines radial and vertical position
+                        // Hottest at base (blast site), cooler as you rise and spread out
+                        let radial_dist = dist_sq.sqrt() / (cap_width * height_factor);
+                        let vertical_factor = (-dy as f32) / cap_height as f32;  // 0.0 at base, 1.0 at top
 
-                            // Hottest at BASE of cap (vertical_factor near 0), cooler at top
-                            // Also cooler at edges (radial_dist near 1)
-                            let heat = radial_dist * 0.6 + vertical_factor * 0.4;
-                            heat.min(1.0)
-                        };
+                        // Heat calculation: hottest at base center, cooler at edges and top
+                        let dist_norm = (radial_dist * 0.5 + vertical_factor * 0.5).min(1.0);
 
                         // Chaotic flickering for explosion
                         let mut seed = (px as u64) * 2654435761 + (py as u64) * 2246822519 + (self.frame + exp.frame as u64) * 1103515245;
@@ -411,7 +402,7 @@ impl Widget for MapWidget {
                         let flicker = ((seed & 0xFF) as f32) / 255.0;
 
                         // RGB gradient with phase-based coloring
-                        let (mut r, mut g, mut b, mut ch) = if flash_phase {
+                        let (r, g, b, ch) = if flash_phase {
                             // Extended flash phase: blinding white hot core
                             if dist_norm < 0.4 {
                                 // Intense white core with slight blue tint (hotter than white)
@@ -487,43 +478,7 @@ impl Widget for MapWidget {
                             (r, g, 0, alpha)
                         };
 
-                        // Stem override: make it darker/less prominent (just smoke column)
-                        if in_stem {
-                            // Stem is always dark gray smoke, not bright
-                            let stem_factor = (dy as f32 / stem_height as f32).max(0.0);
-                            r = (60.0 + stem_factor * 40.0) as u8;
-                            g = (30.0 + stem_factor * 20.0) as u8;
-                            b = 10;
-                            ch = '░';
-                        }
-
                         buf[(px, py)].set_char(ch).set_fg(Color::Rgb(r, g, b));
-                    }
-                }
-            }
-
-            // Add expanding shockwave ring (first 12 frames)
-            if exp.frame < 12 {
-                let ring_radius = (exp.frame as f32 * max_r / 3.0) as i16;
-                let ring_thickness = if exp.frame < 6 { 2 } else { 1 };
-
-                for t in 0..ring_thickness {
-                    for angle_step in 0..32 {
-                        let angle = (angle_step as f32 / 32.0) * std::f32::consts::TAU;
-                        let r = ring_radius + t;
-                        let ring_x = (x as i16 + (r as f32 * angle.cos()) as i16) as u16;
-                        let ring_y = (y as i16 + (r as f32 * angle.sin()) as i16) as u16;
-
-                        if ring_x >= area.x && ring_x < area.x + area.width &&
-                           ring_y >= area.y && ring_y < area.y + area.height {
-                            // Shockwave: bright yellow-white with slower fade
-                            let fade = 1.0 - (exp.frame as f32 / 12.0);
-                            let r = (255.0 * fade) as u8;
-                            let g = (240.0 * fade) as u8;
-                            let b = (200.0 * fade) as u8;
-                            let ch = if exp.frame < 4 { '◉' } else { '○' };
-                            buf[(ring_x, ring_y)].set_char(ch).set_fg(Color::Rgb(r, g, b));
-                        }
                     }
                 }
             }
