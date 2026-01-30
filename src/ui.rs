@@ -135,7 +135,7 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     // Limit max visible fires (keep only the most intense)
-    const MAX_VISIBLE_FIRES: usize = 500;  // Show way more fires (was 200)
+    const MAX_VISIBLE_FIRES: usize = 1000;  // Show LOTS of fires (was 200)
     if fires.len() > MAX_VISIBLE_FIRES {
         fires.sort_by_key(|f| std::cmp::Reverse(f.intensity));
         fires.truncate(MAX_VISIBLE_FIRES);
