@@ -356,44 +356,33 @@ impl Widget for MapWidget {
             }
         }
 
-        // Render fires with chaotic flickering RGB gradients and varied flame symbols
-        const FIRE_HOT: &[char] = &['█', '▓', '▓', '◥', '◤', '◣', '◢', '▲', '△', '♦'];
-        const FIRE_BRIGHT: &[char] = &['▓', '▒', '◥', '◤', '▲', '△', '∧', '╱', '╲', '^'];
-        const FIRE_MED: &[char] = &['▒', '░', '◥', '◢', '∧', '╱', '╲', '/', '\\', '^', '~', '≈'];
-        const FIRE_LOW: &[char] = &['░', '·', '.', '∙', ':', ';', ',', '`', '\'', '~'];
-        const FIRE_EMBER: &[char] = &['·', '.', '∙', ',', '`', '\'', '*', '°', '•', '∘'];
-
+        // Render fires - simple density-based blocks, color does the work
         for fire in &self.fires {
             let x = area.x + fire.x;
             let y = area.y + fire.y;
             if x < area.x + area.width && y < area.y + area.height {
-                // Chaotic flickering: combine position, intensity, and frame for randomness
+                // Subtle flicker in intensity only
                 let seed = hash3(fire.x as u64, fire.y as u64, self.frame);
-                let flicker = ((seed & 0x3F) as i16) - 32;  // -32 to +31 range
-                let visual_intensity = (fire.intensity as i16 + flicker).clamp(0, 255) as u8;
+                let flicker = ((seed & 0x1F) as i16) - 16;  // -16 to +15 range (subtle)
+                let vi = (fire.intensity as i16 + flicker).clamp(0, 255) as u8;
 
-                // Pick character from appropriate tier using different seed bits
-                let char_seed = (seed >> 12) as usize;
-                let (r, g, b, ch) = if visual_intensity > 230 {
-                    (255, 255, 255, FIRE_HOT[char_seed % FIRE_HOT.len()])
-                } else if visual_intensity > 200 {
-                    (255, 250, 180, FIRE_HOT[char_seed % FIRE_HOT.len()])
-                } else if visual_intensity > 170 {
-                    (255, 230, 50, FIRE_BRIGHT[char_seed % FIRE_BRIGHT.len()])
-                } else if visual_intensity > 140 {
-                    (255, 180, 20, FIRE_BRIGHT[char_seed % FIRE_BRIGHT.len()])
-                } else if visual_intensity > 110 {
-                    (255, 120, 0, FIRE_MED[char_seed % FIRE_MED.len()])
-                } else if visual_intensity > 80 {
-                    (255, 70, 0, FIRE_MED[char_seed % FIRE_MED.len()])
-                } else if visual_intensity > 50 {
-                    (230, 30, 0, FIRE_LOW[char_seed % FIRE_LOW.len()])
-                } else if visual_intensity > 30 {
-                    (180, 15, 0, FIRE_LOW[char_seed % FIRE_LOW.len()])
-                } else if visual_intensity > 15 {
-                    (120, 10, 0, FIRE_EMBER[char_seed % FIRE_EMBER.len()])
+                // Density blocks + color gradient - let color convey heat
+                let (r, g, b, ch) = if vi > 220 {
+                    (255, 255, 240, '█')  // White-hot
+                } else if vi > 180 {
+                    (255, 240, 100, '█')  // Bright yellow
+                } else if vi > 140 {
+                    (255, 180, 30, '▓')   // Yellow-orange
+                } else if vi > 100 {
+                    (255, 120, 0, '▓')    // Orange
+                } else if vi > 60 {
+                    (255, 60, 0, '▒')     // Orange-red
+                } else if vi > 30 {
+                    (200, 30, 0, '▒')     // Red
+                } else if vi > 15 {
+                    (140, 20, 0, '░')     // Dark red
                 } else {
-                    (80, 5, 0, FIRE_EMBER[char_seed % FIRE_EMBER.len()])
+                    (90, 10, 0, '░')      // Embers
                 };
 
                 buf[(x, y)].set_char(ch).set_fg(Color::Rgb(r, g, b));
