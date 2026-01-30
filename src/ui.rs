@@ -165,11 +165,13 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
         }
     }
 
-    // Limit max visible fires - truncate without sorting to preserve spatial distribution
-    // Sorting by intensity clusters fires at blast center since center fires are brighter
+    // Limit max visible fires - sample evenly across the vec to show all blast sites
+    // Simple stride-based sampling: if we have 6000 fires and want 2000, take every 3rd
     const MAX_VISIBLE_FIRES: usize = 2000;
     if fires.len() > MAX_VISIBLE_FIRES {
-        fires.truncate(MAX_VISIBLE_FIRES);
+        let stride = fires.len() / MAX_VISIBLE_FIRES;
+        let sampled: Vec<FireRender> = fires.iter().step_by(stride).take(MAX_VISIBLE_FIRES).copied().collect();
+        fires = sampled;
     }
 
     // Calculate blast radius for cursor reticle
@@ -206,6 +208,7 @@ struct ExplosionRender {
 }
 
 /// A fire to render
+#[derive(Clone, Copy)]
 struct FireRender {
     x: u16,
     y: u16,
