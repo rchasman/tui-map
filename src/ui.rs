@@ -65,39 +65,41 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
     // Convert explosions to screen coordinates with aggressive culling
     // Note: Damage calculations still run in app.update_explosions() regardless of viewport
     // This only culls *rendering* to avoid expensive O(r²) nested loops for off-screen effects
-    let mut explosions: Vec<ExplosionRender> = app.explosions.iter().filter_map(|exp| {
-        let (px, py) = viewport.project(exp.lon, exp.lat);
+    let mut explosions: Vec<ExplosionRender> = Vec::new();
+    for exp in &app.explosions {
+        // Try normal position and wrapped positions
+        for &offset in &[0.0, -360.0, 360.0] {
+            let ((px, py), _) = viewport.project_wrapped(exp.lon, exp.lat, offset);
 
-        // Early rejection: negative coords mean off-screen left/top
-        if px < 0 || py < 0 {
-            return None;
+            // Early rejection: negative coords mean off-screen left/top
+            if px < 0 || py < 0 {
+                continue;
+            }
+
+            let cx = (px / 2) as u16;
+            let cy = (py / 4) as u16;
+
+            // Convert radius_km to screen chars (rough: 1 degree ~= 111km at equator)
+            let degrees = exp.radius_km / 111.0;
+            let pixels = (degrees * viewport.zoom * inner.width as f64 / 360.0) as u16;
+            let radius = (pixels / 2).max(3).min(15); // Clamp to reasonable range
+
+            // Cull if too small to see when zoomed out (< 2 chars radius)
+            if radius < 2 {
+                continue;
+            }
+
+            // Cull if entirely off-screen (center + radius outside bounds)
+            if cx >= inner.width + radius || cy >= inner.height + radius {
+                continue;
+            }
+
+            // Cull if center too far off-screen (even if edge might be visible)
+            if cx < inner.width && cy < inner.height {
+                explosions.push(ExplosionRender { x: cx, y: cy, frame: exp.frame, radius });
+            }
         }
-
-        let cx = (px / 2) as u16;
-        let cy = (py / 4) as u16;
-
-        // Convert radius_km to screen chars (rough: 1 degree ~= 111km at equator)
-        let degrees = exp.radius_km / 111.0;
-        let pixels = (degrees * viewport.zoom * inner.width as f64 / 360.0) as u16;
-        let radius = (pixels / 2).max(3).min(15); // Clamp to reasonable range
-
-        // Cull if too small to see when zoomed out (< 2 chars radius)
-        if radius < 2 {
-            return None;
-        }
-
-        // Cull if entirely off-screen (center + radius outside bounds)
-        if cx >= inner.width + radius || cy >= inner.height + radius {
-            return None;
-        }
-
-        // Cull if center too far off-screen (even if edge might be visible)
-        if cx < inner.width && cy < inner.height {
-            Some(ExplosionRender { x: cx, y: cy, frame: exp.frame, radius })
-        } else {
-            None
-        }
-    }).collect();
+    }
 
     // Limit max visible explosions (sort by radius descending, show biggest)
     const MAX_VISIBLE_EXPLOSIONS: usize = 50;
@@ -106,29 +108,31 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
         explosions.truncate(MAX_VISIBLE_EXPLOSIONS);
     }
 
-    // Convert fires to screen coordinates with culling
-    let mut fires: Vec<FireRender> = app.fires.iter().filter_map(|fire| {
+    // Convert fires to screen coordinates with culling and wrapping
+    let mut fires: Vec<FireRender> = Vec::new();
+    for fire in &app.fires {
         // Cull very faint fires (intensity < 20 is barely visible)
         if fire.intensity < 20 {
-            return None;
+            continue;
         }
 
-        let (px, py) = viewport.project(fire.lon, fire.lat);
+        // Try normal position and wrapped positions
+        for &offset in &[0.0, -360.0, 360.0] {
+            let ((px, py), _) = viewport.project_wrapped(fire.lon, fire.lat, offset);
 
-        // Early rejection: negative coords or out of bounds
-        if px < 0 || py < 0 {
-            return None;
+            // Early rejection: negative coords or out of bounds
+            if px < 0 || py < 0 {
+                continue;
+            }
+
+            let cx = (px / 2) as u16;
+            let cy = (py / 4) as u16;
+
+            if cx < inner.width && cy < inner.height {
+                fires.push(FireRender { x: cx, y: cy, intensity: fire.intensity });
+            }
         }
-
-        let cx = (px / 2) as u16;
-        let cy = (py / 4) as u16;
-
-        if cx < inner.width && cy < inner.height {
-            Some(FireRender { x: cx, y: cy, intensity: fire.intensity })
-        } else {
-            None
-        }
-    }).collect();
+    }
 
     // Limit max visible fires (keep only the most intense)
     const MAX_VISIBLE_FIRES: usize = 200;

@@ -235,21 +235,24 @@ impl MapRenderer {
             }
         }
 
-        // Collect cities for glyph rendering (viewport-aware filtering)
+        // Collect cities for glyph rendering (viewport-aware filtering with wrapping)
         if self.settings.show_cities {
             // First, collect all visible cities with their screen positions
+            // Try each city at 0°, +360°, and -360° longitude offsets
             let mut visible_cities: Vec<(&City, u16, u16)> = self.cities
                 .iter()
-                .filter_map(|city| {
-                    // Quick bounds check before expensive projection
-                    let (px, py) = viewport.project(city.lon, city.lat);
+                .flat_map(|city| {
+                    // Try normal position and wrapped positions
+                    [0.0, -360.0, 360.0].iter().filter_map(move |&offset| {
+                        let ((px, py), _) = viewport.project_wrapped(city.lon, city.lat, offset);
 
-                    // Early rejection: negative coords or out of bounds
-                    if px < 0 || py < 0 || !viewport.is_visible(px, py) {
-                        return None;
-                    }
+                        // Early rejection: negative coords or out of bounds
+                        if px < 0 || py < 0 || !viewport.is_visible(px, py) {
+                            return None;
+                        }
 
-                    Some((city, (px / 2) as u16, (py / 4) as u16))
+                        Some((city, (px / 2) as u16, (py / 4) as u16))
+                    })
                 })
                 .collect();
 
@@ -321,35 +324,51 @@ impl MapRenderer {
         }
     }
 
-    /// Draw a linestring with viewport culling
+    /// Draw a linestring with viewport culling and world wrapping
     fn draw_linestring(&self, canvas: &mut BrailleCanvas, line: &LineString, viewport: &Viewport) {
         if line.len() < 2 {
             return;
         }
 
-        // Quick bounding box check using precomputed bbox
+        // Draw the linestring at its normal position and potentially wrapped
+        // This handles the case where the viewport crosses the date line
+        let offsets = [0.0, -360.0, 360.0];
+
+        for &lon_offset in &offsets {
+            self.draw_linestring_with_offset(canvas, line, viewport, lon_offset);
+        }
+    }
+
+    /// Draw a linestring with a longitude offset (for wrapping)
+    fn draw_linestring_with_offset(&self, canvas: &mut BrailleCanvas, line: &LineString, viewport: &Viewport, lon_offset: f64) {
+        // Quick bounding box check using precomputed bbox with offset
         let (min_lon, min_lat, max_lon, max_lat) = line.bbox;
-        let (px1, py1) = viewport.project(min_lon, min_lat);
-        let (px2, py2) = viewport.project(max_lon, max_lat);
+        let ((px1, py1), _) = viewport.project_wrapped(min_lon, min_lat, lon_offset);
+        let ((px2, py2), _) = viewport.project_wrapped(max_lon, max_lat, lon_offset);
         let bb_min_x = px1.min(px2);
         let bb_max_x = px1.max(px2);
         let bb_min_y = py1.min(py2);
         let bb_max_y = py1.max(py2);
 
         // Skip if bounding box is entirely outside viewport
-        if bb_max_x < 0 || bb_min_x > viewport.width as i32 ||
-           bb_max_y < 0 || bb_min_y > viewport.height as i32 {
+        if bb_max_x < -50 || bb_min_x > viewport.width as i32 + 50 ||
+           bb_max_y < -50 || bb_min_y > viewport.height as i32 + 50 {
             return;
         }
 
         let mut prev: Option<(i32, i32)> = None;
 
         for &(lon, lat) in &line.points {
-            let (px, py) = viewport.project(lon, lat);
+            let ((px, py), _) = viewport.project_wrapped(lon, lat, lon_offset);
 
             if let Some((prev_x, prev_y)) = prev {
-                let dist = ((px - prev_x).abs() + (py - prev_y).abs()) as usize;
-                if dist < viewport.width && viewport.line_might_be_visible((prev_x, prev_y), (px, py)) {
+                // Skip drawing if jump is too large (crossing date line within this offset)
+                let dx = (px - prev_x).abs();
+                let dy = (py - prev_y).abs();
+                let dist = (dx + dy) as usize;
+
+                // Only draw if the segment is reasonable and might be visible
+                if dist < viewport.width / 2 && viewport.line_might_be_visible((prev_x, prev_y), (px, py)) {
                     draw_line(canvas, prev_x, prev_y, px, py);
                 }
             }

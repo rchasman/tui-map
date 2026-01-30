@@ -112,8 +112,17 @@ impl Viewport {
 
     /// Project a geographic coordinate (lon, lat) to pixel coordinates
     pub fn project(&self, lon: f64, lat: f64) -> (i32, i32) {
+        self.project_wrapped(lon, lat, 0.0).0
+    }
+
+    /// Project with explicit longitude offset (for wrapping)
+    /// Returns (pixel_coords, normalized_lon)
+    pub fn project_wrapped(&self, lon: f64, lat: f64, lon_offset: f64) -> ((i32, i32), f64) {
+        // Apply wrapping offset
+        let wrapped_lon = lon + lon_offset;
+
         // Web Mercator projection
-        let x = (lon + 180.0) / 360.0;
+        let x = (wrapped_lon + 180.0) / 360.0;
         let lat_rad = lat * PI / 180.0;
         let y = (1.0 - (lat_rad.tan() + 1.0 / lat_rad.cos()).ln() / PI) / 2.0;
 
@@ -127,7 +136,7 @@ impl Viewport {
         let px = ((x - center_x) * scale + self.width as f64 / 2.0) as i32;
         let py = ((y - center_y) * scale + self.height as f64 / 2.0) as i32;
 
-        (px, py)
+        ((px, py), wrapped_lon)
     }
 
     /// Check if a projected point is visible in the viewport
