@@ -197,9 +197,9 @@ impl App {
             radius_km,
         });
 
-        // Spawn fires throughout the blast zone (not just perimeter)
-        // More fires for larger blasts
-        let num_fires = (radius_km / 5.0) as usize + 15;
+        // Spawn MANY fires throughout the blast zone - massive inferno
+        // Way more fires for dramatic effect
+        let num_fires = (radius_km / 2.0) as usize + 50;  // 3-5x more fires
 
         for i in 0..num_fires {
             // Completely random angle
@@ -215,9 +215,10 @@ impl App {
             let dlon = (dist * angle.cos()) / (111.0 * lat.to_radians().cos().max(0.1));
 
             // Vary intensity based on distance from center (hotter near center)
+            // Higher base intensity so fires burn longer before fading
             let center_factor = 1.0 - (dist / (radius_km * 1.5)).min(1.0);
-            let base_intensity = 150.0 + center_factor * 80.0;
-            let intensity = (base_intensity + rand_simple(i as u64 + 1000) * 50.0).min(255.0) as u8;
+            let base_intensity = 180.0 + center_factor * 75.0;  // Higher base (180 vs 150)
+            let intensity = (base_intensity + rand_simple(i as u64 + 1000) * 40.0).min(255.0) as u8;
 
             self.fires.push(Fire {
                 lon: lon + dlon,
@@ -282,23 +283,25 @@ impl App {
             exp.frame < 60 // Animation lasts 60 frames (~1 second at 60fps)
         });
 
-        // Update fires - decay and occasionally spread
+        // Update fires - slow decay and aggressive spreading
         let mut new_fires = Vec::new();
         self.fires.retain_mut(|fire| {
-            // Decay intensity
-            fire.intensity = fire.intensity.saturating_sub(1);
+            // SLOW decay - only decay every 3 frames (3x longer fires!)
+            if self.frame % 3 == 0 {
+                fire.intensity = fire.intensity.saturating_sub(1);
+            }
 
-            // Occasionally spread to nearby area (check less frequently when weak)
-            let should_check_spread = fire.intensity > 100;
+            // More aggressive spreading for lingering fires
+            let should_check_spread = fire.intensity > 80;  // Spread even when weaker
             if should_check_spread {
                 let rand_val = rand_simple((fire.lon * 1000.0) as u64 + fire.intensity as u64);
-                if rand_val > 0.95 {
-                    let spread_dist = 0.1; // degrees
+                if rand_val > 0.92 {  // More frequent spreading (was 0.95)
+                    let spread_dist = 0.08 + rand_simple((fire.lat * 1000.0) as u64 + 7777) * 0.08; // Variable distance
                     let angle = rand_simple((fire.lat * 1000.0) as u64) * std::f64::consts::TAU;
                     new_fires.push(Fire {
                         lon: fire.lon + spread_dist * angle.cos(),
                         lat: fire.lat + spread_dist * angle.sin(),
-                        intensity: fire.intensity.saturating_sub(20),
+                        intensity: fire.intensity.saturating_sub(15),  // Less intensity loss on spread
                     });
                 }
             }
@@ -306,8 +309,8 @@ impl App {
             fire.intensity > 0
         });
 
-        // Add spread fires (limit total)
-        if self.fires.len() < 500 {
+        // Add spread fires (higher limit for more lingering fires)
+        if self.fires.len() < 1500 {  // 3x more fires allowed (was 500)
             self.fires.extend(new_fires);
         }
 

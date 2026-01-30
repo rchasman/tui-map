@@ -111,8 +111,8 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
     // Convert fires to screen coordinates with culling and wrapping
     let mut fires: Vec<FireRender> = Vec::new();
     for fire in &app.fires {
-        // Cull very faint fires (intensity < 20 is barely visible)
-        if fire.intensity < 20 {
+        // Cull only the faintest fires (show even dim embers)
+        if fire.intensity < 10 {
             continue;
         }
 
@@ -135,7 +135,7 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     // Limit max visible fires (keep only the most intense)
-    const MAX_VISIBLE_FIRES: usize = 200;
+    const MAX_VISIBLE_FIRES: usize = 500;  // Show way more fires (was 200)
     if fires.len() > MAX_VISIBLE_FIRES {
         fires.sort_by_key(|f| std::cmp::Reverse(f.intensity));
         fires.truncate(MAX_VISIBLE_FIRES);
@@ -281,27 +281,37 @@ impl Widget for MapWidget {
                 let visual_intensity = (fire.intensity as i16 + flicker).clamp(0, 255) as u8;
 
                 // RGB fire gradient: white (hottest) → yellow → orange → red → dark red
-                let (r, g, b, ch) = if visual_intensity > 220 {
-                    // White hot core
-                    (255, 255, 200, '█')
-                } else if visual_intensity > 180 {
+                // More character variety for organic look
+                let (r, g, b, ch) = if visual_intensity > 230 {
+                    // Blinding white hot core
+                    (255, 255, 255, '█')
+                } else if visual_intensity > 200 {
+                    // Brilliant white-yellow
+                    (255, 250, 180, if (seed >> 8) & 1 == 0 { '█' } else { '▓' })
+                } else if visual_intensity > 170 {
                     // Bright yellow flames
-                    (255, 220, 0, '▓')
+                    (255, 230, 50, if (seed >> 9) & 1 == 0 { '▓' } else { '▒' })
                 } else if visual_intensity > 140 {
+                    // Yellow-orange flames
+                    (255, 180, 20, '▓')
+                } else if visual_intensity > 110 {
                     // Orange flames
-                    (255, 140, 0, '▓')
-                } else if visual_intensity > 100 {
+                    (255, 120, 0, if (seed >> 10) & 1 == 0 { '▓' } else { '▒' })
+                } else if visual_intensity > 80 {
                     // Orange-red
-                    (255, 80, 0, '▒')
-                } else if visual_intensity > 60 {
-                    // Red
-                    (220, 20, 0, '▒')
+                    (255, 70, 0, '▒')
+                } else if visual_intensity > 50 {
+                    // Red flames
+                    (230, 30, 0, '▒')
                 } else if visual_intensity > 30 {
                     // Dark red embers
-                    (160, 10, 0, '░')
+                    (180, 15, 0, '░')
+                } else if visual_intensity > 15 {
+                    // Very dark embers
+                    (120, 10, 0, '░')
                 } else {
-                    // Dying embers
-                    (100, 5, 0, '·')
+                    // Dying embers - almost invisible
+                    (80, 5, 0, '·')
                 };
 
                 buf[(x, y)].set_char(ch).set_fg(Color::Rgb(r, g, b));
