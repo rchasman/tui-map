@@ -65,14 +65,14 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
     // Convert explosions to screen coordinates with aggressive culling
     // Note: Damage calculations still run in app.update_explosions() regardless of viewport
     // This only culls *rendering* to avoid expensive O(r²) nested loops for off-screen effects
-    let mut explosions: Vec<ExplosionRender> = Vec::new();
+    let mut explosions: Vec<ExplosionRender> = Vec::with_capacity(50);
     for exp in &app.explosions {
         // Try normal position and wrapped positions
         for &offset in &[0.0, -360.0, 360.0] {
             let ((px, py), _) = viewport.project_wrapped(exp.lon, exp.lat, offset);
 
-            // Early rejection: negative coords mean off-screen left/top
-            if px < 0 || py < 0 {
+            // Bounds check with safety margin to prevent u16 overflow panics
+            if px < 0 || py < 0 || px > 30000 || py > 30000 {
                 continue;
             }
 
@@ -82,22 +82,29 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
             // Convert radius_km to screen chars (rough: 1 degree ~= 111km at equator)
             let degrees = exp.radius_km / 111.0;
             let pixels = (degrees * viewport.zoom * inner.width as f64 / 360.0) as u16;
-            let radius = (pixels / 2).max(3).min(15); // Clamp to reasonable range
+            let radius = (pixels / 2).max(3);
+
+            // Note: No visual scaling applied - explosions render at their true size
+            // The radius_km already reflects the actual blast size (525km at zoom 1x, 50km at zoom 20x)
 
             // Cull if too small to see when zoomed out (< 2 chars radius)
             if radius < 2 {
                 continue;
             }
 
-            // Cull if entirely off-screen (center + radius outside bounds)
-            if cx >= inner.width + radius || cy >= inner.height + radius {
+            // Cull if entirely off-screen
+            // Check if any part of the explosion circle intersects the screen
+            let left_edge = cx.saturating_sub(radius);
+            let top_edge = cy.saturating_sub(radius);
+            let right_edge = cx.saturating_add(radius);
+            let bottom_edge = cy.saturating_add(radius);
+
+            // Skip if completely off-screen
+            if right_edge < 1 || bottom_edge < 1 || left_edge >= inner.width || top_edge >= inner.height {
                 continue;
             }
 
-            // Cull if center too far off-screen (even if edge might be visible)
-            if cx < inner.width && cy < inner.height {
-                explosions.push(ExplosionRender { x: cx, y: cy, frame: exp.frame, radius });
-            }
+            explosions.push(ExplosionRender { x: cx, y: cy, frame: exp.frame, radius });
         }
     }
 
@@ -109,10 +116,33 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     // Convert fires to screen coordinates with culling and wrapping
-    let mut fires: Vec<FireRender> = Vec::new();
+    // Pre-allocate to avoid reallocations (will truncate to 2000 anyway)
+    let mut fires: Vec<FireRender> = Vec::with_capacity(2000);
+
+    // Compute viewport bounds in lon/lat for fast culling (avoid expensive projections)
+    let half_width_deg = 180.0 / viewport.zoom;
+    let half_height_deg = 90.0 / viewport.zoom;
+    let min_lon = viewport.center_lon - half_width_deg * 1.5; // 1.5x margin for wrapping
+    let max_lon = viewport.center_lon + half_width_deg * 1.5;
+    let min_lat = (viewport.center_lat - half_height_deg * 1.5).max(-90.0);
+    let max_lat = (viewport.center_lat + half_height_deg * 1.5).min(90.0);
+
     for fire in &app.fires {
-        // Cull only the faintest fires (show even dim embers)
+        // Cull faintest fires early
         if fire.intensity < 10 {
+            continue;
+        }
+
+        // Fast viewport culling BEFORE expensive projection (with wrapping checks)
+        let mut in_view = fire.lat >= min_lat && fire.lat <= max_lat;
+        if in_view {
+            // Check if fire is visible at any of the wrapped positions
+            in_view = (fire.lon >= min_lon && fire.lon <= max_lon) ||
+                      (fire.lon - 360.0 >= min_lon && fire.lon - 360.0 <= max_lon) ||
+                      (fire.lon + 360.0 >= min_lon && fire.lon + 360.0 <= max_lon);
+        }
+
+        if !in_view {
             continue;
         }
 
@@ -120,8 +150,8 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
         for &offset in &[0.0, -360.0, 360.0] {
             let ((px, py), _) = viewport.project_wrapped(fire.lon, fire.lat, offset);
 
-            // Early rejection: negative coords or out of bounds
-            if px < 0 || py < 0 {
+            // Bounds check with safety margin to prevent u16 overflow panics
+            if px < 0 || py < 0 || px > 30000 || py > 30000 {
                 continue;
             }
 
@@ -130,25 +160,37 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
 
             if cx < inner.width && cy < inner.height {
                 fires.push(FireRender { x: cx, y: cy, intensity: fire.intensity });
+                break; // Only render once per fire (avoid duplicates)
             }
         }
     }
 
     // Limit max visible fires (keep only the most intense)
-    const MAX_VISIBLE_FIRES: usize = 1000;  // Show LOTS of fires (was 200)
+    // Even 2000 fires is DENSE - terminal can only show ~200x80 chars = 16k braille pixels
+    const MAX_VISIBLE_FIRES: usize = 2000;
     if fires.len() > MAX_VISIBLE_FIRES {
-        fires.sort_by_key(|f| std::cmp::Reverse(f.intensity));
+        fires.sort_unstable_by_key(|f| std::cmp::Reverse(f.intensity)); // unstable is faster
         fires.truncate(MAX_VISIBLE_FIRES);
     }
+
+    // Calculate blast radius for cursor reticle
+    let cursor_blast_radius = if cursor_pos.is_some() {
+        // Same formula as launch_nuke for actual blast
+        let radius_km = 50.0 + 700.0 / viewport.zoom;
+        let degrees = radius_km / 111.0;
+        let pixels = (degrees * viewport.zoom * inner.width as f64 / 360.0) as u16;
+        Some((pixels / 2).max(3)) // True size, minimum 3 chars for visibility
+    } else {
+        None
+    };
 
     // Render braille map
     let map_widget = MapWidget {
         layers,
         cursor_pos,
+        cursor_blast_radius,
         explosions,
         fires,
-        has_states: app.map_renderer.settings.show_states,
-        zoom: viewport.zoom,
         inner_width: inner.width,
         inner_height: inner.height,
         frame: app.frame,
@@ -171,14 +213,35 @@ struct FireRender {
     intensity: u8,
 }
 
+/// Fast 2-value hash with xorshift (inline for performance)
+#[inline(always)]
+fn hash2(a: u64, b: u64) -> u64 {
+    let mut seed = a.wrapping_mul(2654435761).wrapping_add(b.wrapping_mul(2246822519));
+    seed ^= seed << 13;
+    seed ^= seed >> 7;
+    seed ^= seed << 17;
+    seed
+}
+
+/// Fast 3-value hash with xorshift (inline for performance)
+#[inline(always)]
+fn hash3(a: u64, b: u64, c: u64) -> u64 {
+    let mut seed = a.wrapping_mul(2654435761)
+                    .wrapping_add(b.wrapping_mul(2246822519))
+                    .wrapping_add(c);
+    seed ^= seed << 13;
+    seed ^= seed >> 7;
+    seed ^= seed << 17;
+    seed
+}
+
 /// Custom widget that renders braille map with text labels overlaid
 struct MapWidget {
     layers: MapLayers,
     cursor_pos: Option<(u16, u16)>,
+    cursor_blast_radius: Option<u16>,
     explosions: Vec<ExplosionRender>,
     fires: Vec<FireRender>,
-    has_states: bool,
-    zoom: f64,
     inner_width: u16,
     inner_height: u16,
     frame: u64,
@@ -214,16 +277,14 @@ impl Widget for MapWidget {
         // 1. County borders (DarkGray - at back)
         self.render_layer(&self.layers.counties, Color::DarkGray, area, buf);
 
-        // 2. Country borders (Yellow if states visible at this zoom, else Cyan)
-        let states_visible = self.has_states && self.zoom >= 4.0;
-        let border_color = if states_visible { Color::Yellow } else { Color::Cyan };
-        self.render_layer(&self.layers.borders, border_color, area, buf);
-
-        // 3. State borders (Yellow)
+        // 2. State borders (Yellow)
         self.render_layer(&self.layers.states, Color::Yellow, area, buf);
 
-        // 4. Coastlines (Cyan - on top of borders)
+        // 3. Coastlines (Cyan)
         self.render_layer(&self.layers.coastlines, Color::Cyan, area, buf);
+
+        // 4. Country borders (Cyan - on top so always visible above states)
+        self.render_layer(&self.layers.borders, Color::Cyan, area, buf);
 
         // Then overlay city markers and labels
         let marker_style = Style::default().fg(Color::White);
@@ -272,11 +333,7 @@ impl Widget for MapWidget {
             let y = area.y + fire.y;
             if x < area.x + area.width && y < area.y + area.height {
                 // Chaotic flickering: combine position, intensity, and frame for randomness
-                // Use xorshift-style hash to break spatial patterns
-                let mut seed = (fire.x as u64) * 2654435761 + (fire.y as u64) * 2246822519 + self.frame;
-                seed ^= seed << 13;
-                seed ^= seed >> 7;
-                seed ^= seed << 17;
+                let seed = hash3(fire.x as u64, fire.y as u64, self.frame);
                 let flicker = ((seed & 0x3F) as i16) - 32;  // -32 to +31 range
                 let visual_intensity = (fire.intensity as i16 + flicker).clamp(0, 255) as u8;
 
@@ -348,66 +405,71 @@ impl Widget for MapWidget {
 
             // Draw mushroom cloud - ONLY UPWARD, nothing below cursor
             let radius_i16 = exp.radius as i16;
-            for dy in -cap_height..0 {
-                let py = (y as i16 + dy) as u16;
+            let cap_height_f32 = cap_height as f32;
 
-                // Skip entire row if off-screen
-                if py < area.y || py >= area.y + area.height {
-                    continue;
+            // Precompute frame-based seed components (hoist out of inner loop)
+            let frame_seed_component = self.frame + exp.frame as u64;
+
+            for dy in -cap_height..0 {
+                // Safe signed addition with bounds check BEFORE casting to u16
+                let py_signed = (y as i16) + dy;
+                if py_signed < 0 || py_signed >= (area.y + area.height) as i16 {
+                    continue; // Skip if off-screen (handles negative overflow)
                 }
+                let py = py_signed as u16;
 
                 let dy_sq = dy * dy;
+                let dy_f32 = dy as f32;
+                let height_ratio = -dy_f32 / cap_height_f32;
+
+                // Precompute height tier (hoist branching out of x loop)
+                let (base_width, height_mult, large_mult, fine_mult) = if height_ratio < 0.2 {
+                    (0.5, 0.4, 0.0, 0.5)  // Rising column
+                } else if height_ratio < 0.5 {
+                    (0.9, 1.5, 0.7, 0.3)  // Transition
+                } else if height_ratio < 0.75 {
+                    (1.4, 2.0, 1.2, 0.4)  // Lower cap
+                } else {
+                    (1.9, 2.5, 2.0, 0.8)  // Roiling top
+                };
+
+                let height_component = if height_ratio < 0.2 {
+                    height_ratio * height_mult
+                } else if height_ratio < 0.5 {
+                    (height_ratio - 0.2) * height_mult
+                } else if height_ratio < 0.75 {
+                    (height_ratio - 0.5) * height_mult
+                } else {
+                    (height_ratio - 0.75) * height_mult
+                };
 
                 for dx in -(radius_i16)..=(radius_i16) {
                     let dist_sq = (dx * dx + dy_sq) as f32;
 
-                    // Turbulent mushroom cap with MASSIVE chaotic roiling at top
-                    let height_ratio = (-dy as f32) / cap_height as f32;  // 0.0 at base, 1.0 at top
+                    // Multi-scale turbulence (compute both at once)
+                    let dx_f32 = dx as f32;
+                    let angle = dx_f32.atan2(dy_f32);
+                    let large_turb_seed = hash2((angle * 1000.0) as u64, self.frame / 5);
+                    let large_turbulence = ((large_turb_seed & 0xFF) as f32 / 255.0 - 0.5) * 0.6;
 
-                    // Multi-scale turbulence for organic chaos
-                    // Large-scale turbulence (wave-like bulges)
-                    let angle = (dx as f32).atan2(dy as f32);
-                    let mut large_turb_seed = ((angle * 1000.0) as u64).wrapping_mul(6364136223846793005)
-                                              + (self.frame / 5).wrapping_mul(1442695040888963407);
-                    large_turb_seed ^= large_turb_seed << 13;
-                    large_turb_seed ^= large_turb_seed >> 7;
-                    large_turb_seed ^= large_turb_seed << 17;
-                    let large_turbulence = ((large_turb_seed & 0xFF) as f32 / 255.0 - 0.5) * 0.6;  // -30% to +30%
+                    let fine_turb_seed = hash3(dx as u64, dy as u64, frame_seed_component);
+                    let fine_turbulence = ((fine_turb_seed & 0xFF) as f32 / 255.0 - 0.5) * 0.4;
 
-                    // Fine-scale turbulence (pixel-level chaos)
-                    let mut fine_turb_seed = (dx as u64).wrapping_mul(2654435761)
-                                           + (dy as u64).wrapping_mul(2246822519)
-                                           + (self.frame + exp.frame as u64).wrapping_mul(1103515245);
-                    fine_turb_seed ^= fine_turb_seed << 13;
-                    fine_turb_seed ^= fine_turb_seed >> 7;
-                    fine_turb_seed ^= fine_turb_seed << 17;
-                    let fine_turbulence = ((fine_turb_seed & 0xFF) as f32 / 255.0 - 0.5) * 0.4;  // -20% to +20%
-
-                    // Height-based width with MASSIVE roiling cap
-                    let height_factor = if height_ratio < 0.2 {
-                        // Rising column (0-20% height) - narrow chaotic base
-                        0.5 + height_ratio * 0.4 + fine_turbulence * 0.5
-                    } else if height_ratio < 0.5 {
-                        // Transition to cap (20-50%) - expanding rapidly
-                        0.9 + (height_ratio - 0.2) * 1.5 + large_turbulence * 0.7 + fine_turbulence * 0.3
-                    } else if height_ratio < 0.75 {
-                        // Lower cap (50-75%) - building massive bulges
-                        1.4 + (height_ratio - 0.5) * 2.0 + large_turbulence * 1.2 + fine_turbulence * 0.4
-                    } else {
-                        // ROILING TOP (75-100%) - MASSIVE chaotic billowing cap
-                        1.9 + (height_ratio - 0.75) * 2.5 + large_turbulence * 2.0 + fine_turbulence * 0.8
-                    };
+                    // Height-based width calculation (branchless tier system)
+                    let height_factor = base_width + height_component +
+                                       large_turbulence * large_mult +
+                                       fine_turbulence * fine_mult;
 
                     let effective_width_sq = (cap_width * height_factor) * (cap_width * height_factor);
                     let in_cloud = dist_sq <= effective_width_sq;
 
                     if in_cloud {
-                        let px = (x as i16 + dx) as u16;
-
-                        // Bounds check x-axis only
-                        if px < area.x || px >= area.x + area.width {
-                            continue;
+                        // Safe signed addition with bounds check BEFORE casting to u16
+                        let px_signed = (x as i16) + dx;
+                        if px_signed < 0 || px_signed >= (area.x + area.width) as i16 {
+                            continue; // Skip if off-screen (handles negative overflow)
                         }
+                        let px = px_signed as u16;
 
                         // Calculate heat - combines radial and vertical position
                         // Hottest at base (blast site), cooler as you rise and spread out
@@ -418,10 +480,7 @@ impl Widget for MapWidget {
                         let dist_norm = (radial_dist * 0.5 + vertical_factor * 0.5).min(1.0);
 
                         // Chaotic flickering for explosion
-                        let mut seed = (px as u64) * 2654435761 + (py as u64) * 2246822519 + (self.frame + exp.frame as u64) * 1103515245;
-                        seed ^= seed << 13;
-                        seed ^= seed >> 7;
-                        seed ^= seed << 17;
+                        let seed = hash3(px as u64, py as u64, self.frame + exp.frame as u64);
                         let flicker = ((seed & 0xFF) as f32) / 255.0;
 
                         // RGB gradient with phase-based coloring
@@ -507,12 +566,47 @@ impl Widget for MapWidget {
             }
         }
 
-        // Render cursor marker
+        // Render cursor blast radius circle
         if let Some((cx, cy)) = self.cursor_pos {
-            let x = area.x + cx;
-            let y = area.y + cy;
-            if x < area.x + area.width && y < area.y + area.height {
-                buf[(x, y)].set_char('╋').set_fg(Color::Red);
+            if let Some(radius) = self.cursor_blast_radius {
+                let center_x = area.x as i32 + cx as i32;
+                let center_y = area.y as i32 + cy as i32;
+                let r = radius as i32;
+
+                // Compute bounds for circle drawing (optimize by not checking every point)
+                let min_x = (center_x - r).max(area.x as i32);
+                let max_x = (center_x + r).min((area.x + area.width) as i32 - 1);
+                let min_y = (center_y - r).max(area.y as i32);
+                let max_y = (center_y + r).min((area.y + area.height) as i32 - 1);
+
+                let r_sq = r * r;
+                let inner_r_sq = (r - 1).max(0) * (r - 1).max(0);
+
+                // Draw circle outline using distance check
+                for y in min_y..=max_y {
+                    let dy = y - center_y;
+                    let dy_sq = dy * dy;
+
+                    for x in min_x..=max_x {
+                        let dx = x - center_x;
+                        let dist_sq = dx * dx + dy_sq;
+
+                        // Only render points near the circle perimeter (not filled)
+                        if dist_sq >= inner_r_sq && dist_sq <= r_sq {
+                            buf[(x as u16, y as u16)]
+                                .set_char('·')
+                                .set_fg(Color::Red);
+                        }
+                    }
+                }
+
+                // Draw center crosshair
+                if center_x >= area.x as i32 && center_x < (area.x + area.width) as i32 &&
+                   center_y >= area.y as i32 && center_y < (area.y + area.height) as i32 {
+                    buf[(center_x as u16, center_y as u16)]
+                        .set_char('✕')
+                        .set_fg(Color::Red);
+                }
             }
         }
     }

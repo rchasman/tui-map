@@ -45,6 +45,8 @@ pub struct App {
     pub casualties: u64,
     /// Frame counter for animation randomness
     pub frame: u64,
+    /// Last frame when a nuke was launched (for cooldown)
+    last_nuke_frame: u64,
 }
 
 impl App {
@@ -67,6 +69,7 @@ impl App {
             fallout: Vec::new(),
             casualties: 0,
             frame: 0,
+            last_nuke_frame: 0,
         }
     }
 
@@ -182,13 +185,24 @@ impl App {
 
     /// Launch a nuke at the given screen position
     pub fn launch_nuke(&mut self, col: u16, row: u16) {
+        // Cooldown: 15 frames between nukes (~250ms at 60fps)
+        const NUKE_COOLDOWN_FRAMES: u64 = 15;
+
+        if self.frame < self.last_nuke_frame + NUKE_COOLDOWN_FRAMES {
+            return; // Still on cooldown
+        }
+
+        self.last_nuke_frame = self.frame;
+
         let px = ((col.saturating_sub(1)) as i32) * 2;
         let py = ((row.saturating_sub(1)) as i32) * 4;
         let (lon, lat) = self.viewport.unproject(px, py);
 
-        // Blast radius scales inversely with zoom - bigger nukes when zoomed out
-        // Zoomed out (1x) = ~500km radius (strategic), Zoomed in (20x+) = ~25km (tactical)
-        let radius_km = 25.0 + 500.0 / self.viewport.zoom;
+        // Blast radius scales with zoom - bigger nukes when zoomed out
+        // Zoomed out (1x) = ~750km radius (regional devastation)
+        // Medium (5x) = ~190km radius (city-destroying)
+        // Zoomed in (20x+) = ~87km (tactical)
+        let radius_km = 50.0 + 700.0 / self.viewport.zoom;
 
         self.explosions.push(Explosion {
             lon,
@@ -200,32 +214,48 @@ impl App {
         // Spawn MASSIVE DENSE fire coverage - scale with area, not radius
         // Fire density should be consistent regardless of zoom level
         let area_km2 = std::f64::consts::PI * radius_km * radius_km;
-        let num_fires = ((area_km2 / 10.0) as usize + 100).min(2000);  // ~1 fire per 10km², capped at 2000
+        // Target: ~1 fire per 5km² for dense coverage, cap at 20k fires per blast
+        let target_fires = ((area_km2 / 5.0) as usize + 200).min(20000);
 
-        for i in 0..num_fires {
-            // Completely random angle
-            let angle = rand_simple(i as u64 * 7919) * std::f64::consts::TAU;
+        // Pre-allocate to avoid reallocations
+        self.fires.reserve(target_fires);
 
-            // Random distance using sqrt for uniform 2D distribution
-            // This fills the entire circle, not just a ring
-            let rand_dist = rand_simple(i as u64 * 6547);
-            let dist = radius_km * rand_dist.sqrt() * (0.2 + rand_simple(i as u64 * 8191) * 1.6);
+        // Batch generate fires using rejection sampling (faster than individual checks)
+        let cos_lat = lat.to_radians().cos().max(0.1);
+        let mut spawned = 0;
+        let mut attempt = 0;
 
-            // Convert km to degrees (rough approximation)
+        while spawned < target_fires && attempt < target_fires * 2 {
+            // Generate fire position
+            let angle = rand_simple((attempt as u64).wrapping_mul(7919)) * std::f64::consts::TAU;
+            let rand_dist = rand_simple((attempt as u64).wrapping_mul(6547));
+            let dist = radius_km * rand_dist.sqrt();
+
             let dlat = (dist * angle.sin()) / 111.0;
-            let dlon = (dist * angle.cos()) / (111.0 * lat.to_radians().cos().max(0.1));
+            let dlon = (dist * angle.cos()) / (111.0 * cos_lat);
 
-            // Vary intensity based on distance from center (hotter near center)
-            // Higher base intensity so fires burn longer before fading
-            let center_factor = 1.0 - (dist / (radius_km * 1.5)).min(1.0);
-            let base_intensity = 200.0 + center_factor * 55.0;  // Very high base (200-255)
-            let intensity = (base_intensity + rand_simple(i as u64 + 1000) * 30.0).min(255.0) as u8;
+            let fire_lon = lon + dlon;
+            let fire_lat = lat + dlat;
+
+            attempt += 1;
+
+            // Fast O(1) land check
+            if !self.map_renderer.is_on_land(fire_lon, fire_lat) {
+                continue;
+            }
+
+            // Vary intensity based on distance from center
+            let center_factor = 1.0 - (dist / radius_km);
+            let base_intensity = 200.0 + center_factor * 55.0;
+            let intensity = (base_intensity + rand_simple((attempt as u64).wrapping_add(1000)) * 30.0).min(255.0) as u8;
 
             self.fires.push(Fire {
-                lon: lon + dlon,
-                lat: lat + dlat,
+                lon: fire_lon,
+                lat: fire_lat,
                 intensity,
             });
+
+            spawned += 1;
         }
 
         // Create fallout zone (larger than blast, persists longer)
@@ -242,11 +272,11 @@ impl App {
 
     /// Apply blast damage to cities within radius
     fn apply_blast_damage(&mut self, lon: f64, lat: f64, radius_km: f64) {
-        // Convert radius to degrees (rough: 1 degree ≈ 111km at equator)
-        let radius_degrees = radius_km / 111.0;
+        // Query radius needs to include city sizes too (add max possible city radius ~50km)
+        let query_radius_degrees = (radius_km + 50.0) / 111.0;
 
-        // Query spatial grid for cities in radius (O(1) lookup)
-        let candidate_indices = self.map_renderer.city_grid.query_radius(lon, lat, radius_degrees);
+        // Query spatial grid for cities in expanded radius
+        let candidate_indices = self.map_renderer.city_grid.query_radius(lon, lat, query_radius_degrees);
 
         for &idx in &candidate_indices {
             if let Some(city) = self.map_renderer.city_grid.get_mut(idx) {
@@ -255,16 +285,33 @@ impl App {
                     continue;
                 }
 
-                let dist = fast_distance_km(lon, lat, city.lon, city.lat);
-                if dist < radius_km {
-                    // Closer = more casualties (inverse square falloff)
-                    let damage_ratio = 1.0 - (dist / radius_km).powi(2);
+                // Distance from blast center to city center
+                let center_dist = fast_distance_km(lon, lat, city.lon, city.lat);
 
-                    // Direct hit (within 20% of radius) = total destruction
-                    let killed = if dist < radius_km * 0.2 {
-                        city.population // Everyone dies
+                // Blast affects city if circles overlap: center_dist < blast_radius + city_radius
+                let effective_blast_reach = radius_km + city.radius_km;
+
+                if center_dist < effective_blast_reach {
+                    // Calculate what portion of city is affected
+                    // If blast center is inside city, entire city affected
+                    // If partial overlap, proportional damage
+
+                    let killed = if center_dist < city.radius_km {
+                        // Blast center inside city = total destruction
+                        city.population
+                    } else if center_dist < radius_km * 0.3 {
+                        // Very close blast = massive casualties
+                        let damage_ratio = 1.0 - (center_dist / (radius_km * 0.3)).powi(2);
+                        (city.population as f64 * damage_ratio.max(0.8)) as u64
                     } else {
-                        (city.population as f64 * damage_ratio * 0.9) as u64
+                        // Partial overlap - calculate overlap area ratio
+                        // Simplified: use distance-based falloff with city size consideration
+                        let normalized_dist = (center_dist - city.radius_km) / radius_km;
+                        let damage_ratio = (1.0 - normalized_dist.powi(2)).max(0.0);
+
+                        // More damage to larger cities (more exposed area)
+                        let size_factor = (city.radius_km / 10.0).min(2.0); // Up to 2x for large cities
+                        (city.population as f64 * damage_ratio * 0.7 * size_factor) as u64
                     };
 
                     city.population = city.population.saturating_sub(killed);
@@ -285,7 +332,8 @@ impl App {
         });
 
         // Update fires - VERY slow decay and VERY aggressive spreading
-        let mut new_fires = Vec::new();
+        // Pre-allocate for spreading fires (estimate ~15% spread rate × avg 1.5 fires)
+        let mut new_fires = Vec::with_capacity(self.fires.len() / 5);
         self.fires.retain_mut(|fire| {
             // VERY SLOW decay - only decay every 5 frames (5x longer fires!)
             if self.frame % 5 == 0 {
@@ -295,18 +343,31 @@ impl App {
             // VERY aggressive spreading - fires spread like wildfire
             let should_check_spread = fire.intensity > 60;  // Even weak fires spread
             if should_check_spread {
-                let rand_val = rand_simple((fire.lon * 1000.0) as u64 + fire.intensity as u64 + self.frame);
+                let rand_val = rand_simple(hash3(
+                    (fire.lon * 1000.0) as u64,
+                    fire.intensity as u64,
+                    self.frame
+                ));
                 if rand_val > 0.85 {  // Much more frequent spreading (was 0.92)
                     // Spawn 1-3 spread fires per spread event
-                    let num_spreads = if rand_simple((fire.lat * 1000.0) as u64 + self.frame) > 0.7 { 2 } else { 1 };
+                    let num_spreads = if rand_simple(hash2(
+                        (fire.lat * 1000.0) as u64,
+                        self.frame
+                    )) > 0.7 { 2 } else { 1 };
 
                     for s in 0..num_spreads {
-                        let spread_dist = 0.04 + rand_simple((fire.lat * 1000.0) as u64 + 7777 + s as u64) * 0.12; // 0.04-0.16 degrees
-                        let angle = rand_simple((fire.lat * 1000.0) as u64 + s as u64) * std::f64::consts::TAU;
+                        let lat_seed = (fire.lat * 1000.0) as u64;
+                        let spread_dist = 0.04 + rand_simple(hash3(lat_seed, 7777, s as u64)) * 0.12;
+                        let angle = rand_simple(hash2(lat_seed, s as u64)) * std::f64::consts::TAU;
+
+                        let new_lon = fire.lon + spread_dist * angle.cos();
+                        let new_lat = fire.lat + spread_dist * angle.sin();
+
+                        // Collect all potential spread fires (land check happens later)
                         new_fires.push(Fire {
-                            lon: fire.lon + spread_dist * angle.cos(),
-                            lat: fire.lat + spread_dist * angle.sin(),
-                            intensity: fire.intensity.saturating_sub(10),  // Minimal loss (was 15)
+                            lon: new_lon,
+                            lat: new_lat,
+                            intensity: fire.intensity.saturating_sub(10),
                         });
                     }
                 }
@@ -315,40 +376,48 @@ impl App {
             fire.intensity > 0
         });
 
-        // Add spread fires (much higher limit for massive infernos)
-        if self.fires.len() < 5000 {  // 10x more fires allowed (was 500)
-            self.fires.extend(new_fires);
-        }
+        // Filter out fires that would spawn on water (only keep land fires)
+        new_fires.retain(|fire| self.map_renderer.is_on_land(fire.lon, fire.lat));
 
-        // Collect damage zones from fires (only strong fires cause damage)
-        let mut damage_zones = Vec::new();
-        for fire in &self.fires {
-            if fire.intensity > 50 {
-                damage_zones.push((fire.lon, fire.lat, 20.0, 0.001)); // 0.1% per frame
-            }
-        }
-
-        // Early exit if no damage zones
-        if damage_zones.is_empty() && self.fallout.is_empty() {
-            return !self.explosions.is_empty();
+        // Add spread fires (massive limit for apocalyptic infernos)
+        // Check cap BEFORE spawning to avoid wasted allocations
+        let fires_remaining = 30000_usize.saturating_sub(self.fires.len());
+        if fires_remaining > 0 {
+            let to_add = new_fires.len().min(fires_remaining);
+            self.fires.extend(new_fires.into_iter().take(to_add));
         }
 
         // Update fallout - decay slowly
         self.fallout.retain_mut(|zone| {
             zone.intensity = zone.intensity.saturating_sub(1);
-
-            // Fallout causes gradual casualties
-            if zone.intensity > 0 {
-                let damage_rate = (zone.intensity as f64 / 10000.0) * 0.005; // Slower trickle
-                damage_zones.push((zone.lon, zone.lat, zone.radius_km, damage_rate));
-            }
-
             zone.intensity > 0
         });
 
-        // Apply all ongoing damage
-        for (lon, lat, radius_km, rate) in damage_zones {
-            self.apply_ongoing_damage(lon, lat, radius_km, rate);
+        // Apply ongoing damage only every 10 frames for massive performance boost
+        // Fires and fallout are gradual effects - skipping frames is imperceptible
+        if self.frame % 10 == 0 {
+            // Pre-allocate damage zones vector
+            let mut damage_zones = Vec::with_capacity(self.fires.len() / 10 + self.fallout.len());
+
+            // Collect damage zones from fires (only strong fires cause damage)
+            for fire in &self.fires {
+                if fire.intensity > 50 {
+                    damage_zones.push((fire.lon, fire.lat, 20.0, 0.01)); // 1% per 10 frames (same rate)
+                }
+            }
+
+            // Fallout causes gradual casualties
+            for zone in &self.fallout {
+                if zone.intensity > 0 {
+                    let damage_rate = (zone.intensity as f64 / 10000.0) * 0.05; // 10x per tick (same total rate)
+                    damage_zones.push((zone.lon, zone.lat, zone.radius_km, damage_rate));
+                }
+            }
+
+            // Apply all ongoing damage
+            for (lon, lat, radius_km, rate) in damage_zones {
+                self.apply_ongoing_damage(lon, lat, radius_km, rate);
+            }
         }
 
         !self.explosions.is_empty() || !self.fires.is_empty() || !self.fallout.is_empty()
@@ -356,19 +425,22 @@ impl App {
 
     /// Apply ongoing damage (fire/fallout) - small percentage casualties
     fn apply_ongoing_damage(&mut self, lon: f64, lat: f64, radius_km: f64, rate: f64) {
-        // Convert radius to degrees (rough: 1 degree ≈ 111km at equator)
-        let radius_degrees = radius_km / 111.0;
+        // Query radius needs to include city sizes too
+        let query_radius_degrees = (radius_km + 50.0) / 111.0;
 
-        // Query spatial grid for cities in radius (O(1) lookup)
-        let candidate_indices = self.map_renderer.city_grid.query_radius(lon, lat, radius_degrees);
+        // Query spatial grid for cities in expanded radius
+        let candidate_indices = self.map_renderer.city_grid.query_radius(lon, lat, query_radius_degrees);
 
         for &idx in &candidate_indices {
             if let Some(city) = self.map_renderer.city_grid.get_mut(idx) {
                 if city.population == 0 {
                     continue;
                 }
+
                 let dist = fast_distance_km(lon, lat, city.lon, city.lat);
-                if dist < radius_km {
+
+                // Fire/fallout affects city if circles overlap
+                if dist < radius_km + city.radius_km {
                     let damage = ((city.population as f64 * rate) as u64).max(1);
                     city.population = city.population.saturating_sub(damage);
                     self.casualties += damage;
@@ -376,6 +448,7 @@ impl App {
             }
         }
     }
+
 }
 
 /// Fast equirectangular distance approximation in kilometers
@@ -410,6 +483,28 @@ fn haversine_km(lon1: f64, lat1: f64, lon2: f64, lat2: f64) -> f64 {
     let a = (dlat / 2.0).sin().powi(2) + lat1.cos() * lat2.cos() * (dlon / 2.0).sin().powi(2);
     let c = 2.0 * a.sqrt().asin();
     r * c
+}
+
+/// Fast 2-value hash with xorshift
+#[inline(always)]
+fn hash2(a: u64, b: u64) -> u64 {
+    let mut seed = a.wrapping_mul(2654435761).wrapping_add(b.wrapping_mul(2246822519));
+    seed ^= seed << 13;
+    seed ^= seed >> 7;
+    seed ^= seed << 17;
+    seed
+}
+
+/// Fast 3-value hash with xorshift
+#[inline(always)]
+fn hash3(a: u64, b: u64, c: u64) -> u64 {
+    let mut seed = a.wrapping_mul(2654435761)
+                    .wrapping_add(b.wrapping_mul(2246822519))
+                    .wrapping_add(c);
+    seed ^= seed << 13;
+    seed ^= seed >> 7;
+    seed ^= seed << 17;
+    seed
 }
 
 /// Fast deterministic random using xorshift - Carmack style
