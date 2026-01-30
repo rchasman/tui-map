@@ -165,11 +165,10 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
         }
     }
 
-    // Limit max visible fires (keep only the most intense)
-    // Even 2000 fires is DENSE - terminal can only show ~200x80 chars = 16k braille pixels
+    // Limit max visible fires - truncate without sorting to preserve spatial distribution
+    // Sorting by intensity clusters fires at blast center since center fires are brighter
     const MAX_VISIBLE_FIRES: usize = 2000;
     if fires.len() > MAX_VISIBLE_FIRES {
-        fires.sort_unstable_by_key(|f| std::cmp::Reverse(f.intensity)); // unstable is faster
         fires.truncate(MAX_VISIBLE_FIRES);
     }
 
