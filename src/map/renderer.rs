@@ -2,6 +2,7 @@ use crate::braille::BrailleCanvas;
 use crate::map::geometry::draw_line;
 use crate::map::projection::Viewport;
 use crate::map::spatial::SpatialGrid;
+use std::cell::RefCell;
 
 /// Rendered map layers with separate canvases for color differentiation
 pub struct MapLayers {
@@ -109,6 +110,45 @@ impl Default for DisplaySettings {
     }
 }
 
+/// Cache key for static layer rendering
+#[derive(Clone, PartialEq)]
+struct RenderCacheKey {
+    width: usize,
+    height: usize,
+    center_lon: i64,  // Quantized to 0.001 degrees
+    center_lat: i64,
+    zoom: i64,        // Quantized to 0.01
+    show_coastlines: bool,
+    show_borders: bool,
+    show_states: bool,
+    show_counties: bool,
+}
+
+impl RenderCacheKey {
+    fn from_viewport(viewport: &Viewport, width: usize, height: usize, settings: &DisplaySettings) -> Self {
+        Self {
+            width,
+            height,
+            center_lon: (viewport.center_lon * 1000.0) as i64,
+            center_lat: (viewport.center_lat * 1000.0) as i64,
+            zoom: (viewport.zoom * 100.0) as i64,
+            show_coastlines: settings.show_coastlines,
+            show_borders: settings.show_borders,
+            show_states: settings.show_states,
+            show_counties: settings.show_counties,
+        }
+    }
+}
+
+/// Cached static layer renders
+struct RenderCache {
+    key: RenderCacheKey,
+    coastlines: BrailleCanvas,
+    borders: BrailleCanvas,
+    states: BrailleCanvas,
+    counties: BrailleCanvas,
+}
+
 /// Map renderer with multi-resolution coastline data
 pub struct MapRenderer {
     pub coastlines_low: Vec<LineString>,
@@ -120,6 +160,7 @@ pub struct MapRenderer {
     pub counties: Vec<LineString>,
     pub city_grid: SpatialGrid<City>,
     pub settings: DisplaySettings,
+    cache: RefCell<Option<RenderCache>>,
 }
 
 impl MapRenderer {
@@ -136,6 +177,7 @@ impl MapRenderer {
             counties: Vec::new(),
             city_grid: SpatialGrid::new(10.0),
             settings: DisplaySettings::default(),
+            cache: RefCell::new(None),
         }
     }
 
@@ -202,41 +244,70 @@ impl MapRenderer {
         let lod = Lod::from_zoom(viewport.zoom);
         let mut labels = Vec::new();
 
-        // Create separate canvases for each layer
-        let mut coastlines_canvas = BrailleCanvas::new(width, height);
-        let mut borders_canvas = BrailleCanvas::new(width, height);
-        let mut states_canvas = BrailleCanvas::new(width, height);
-        let mut counties_canvas = BrailleCanvas::new(width, height);
+        // Check if we can use cached static layers
+        let cache_key = RenderCacheKey::from_viewport(viewport, width, height, &self.settings);
+        let cache_borrow = self.cache.borrow();
+        let use_cache = cache_borrow.as_ref().map(|c| c.key == cache_key).unwrap_or(false);
 
-        // Draw coastlines (Cyan - base map)
-        if self.settings.show_coastlines {
-            let coastlines = self.get_coastlines(lod);
-            for line in coastlines {
-                self.draw_linestring(&mut coastlines_canvas, line, viewport);
-            }
-        }
+        let (coastlines_canvas, borders_canvas, states_canvas, counties_canvas) = if use_cache {
+            // Use cached canvases (clone is cheap for braille - just Vec<Vec<u8>>)
+            let cache = cache_borrow.as_ref().unwrap();
+            (
+                cache.coastlines.clone(),
+                cache.borders.clone(),
+                cache.states.clone(),
+                cache.counties.clone(),
+            )
+        } else {
+            drop(cache_borrow); // Release borrow before updating
 
-        // Draw country borders (master toggle for all political boundaries)
-        if self.settings.show_borders {
-            let borders = self.get_borders(lod);
-            for line in borders {
-                self.draw_linestring(&mut borders_canvas, line, viewport);
-            }
+            // Render static layers from scratch
+            let mut coastlines_canvas = BrailleCanvas::new(width, height);
+            let mut borders_canvas = BrailleCanvas::new(width, height);
+            let mut states_canvas = BrailleCanvas::new(width, height);
+            let mut counties_canvas = BrailleCanvas::new(width, height);
 
-            // Draw state/province borders (sub-toggle, visible at zoom >= 4.0)
-            if self.settings.show_states && viewport.zoom >= 4.0 {
-                for line in &self.states {
-                    self.draw_linestring(&mut states_canvas, line, viewport);
+            // Draw coastlines (Cyan - base map)
+            if self.settings.show_coastlines {
+                let coastlines = self.get_coastlines(lod);
+                for line in coastlines {
+                    self.draw_linestring(&mut coastlines_canvas, line, viewport);
                 }
             }
 
-            // Draw county borders (sub-toggle, visible at zoom >= 8.0)
-            if self.settings.show_counties && viewport.zoom >= 8.0 {
-                for line in &self.counties {
-                    self.draw_linestring(&mut counties_canvas, line, viewport);
+            // Draw country borders (master toggle for all political boundaries)
+            if self.settings.show_borders {
+                let borders = self.get_borders(lod);
+                for line in borders {
+                    self.draw_linestring(&mut borders_canvas, line, viewport);
+                }
+
+                // Draw state/province borders (sub-toggle, visible at zoom >= 4.0)
+                if self.settings.show_states && viewport.zoom >= 4.0 {
+                    for line in &self.states {
+                        self.draw_linestring(&mut states_canvas, line, viewport);
+                    }
+                }
+
+                // Draw county borders (sub-toggle, visible at zoom >= 8.0)
+                if self.settings.show_counties && viewport.zoom >= 8.0 {
+                    for line in &self.counties {
+                        self.draw_linestring(&mut counties_canvas, line, viewport);
+                    }
                 }
             }
-        }
+
+            // Update cache
+            *self.cache.borrow_mut() = Some(RenderCache {
+                key: cache_key,
+                coastlines: coastlines_canvas.clone(),
+                borders: borders_canvas.clone(),
+                states: states_canvas.clone(),
+                counties: counties_canvas.clone(),
+            });
+
+            (coastlines_canvas, borders_canvas, states_canvas, counties_canvas)
+        };
 
         // Collect cities for glyph rendering (viewport-aware filtering with wrapping)
         if self.settings.show_cities {

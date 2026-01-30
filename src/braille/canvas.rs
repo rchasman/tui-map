@@ -1,6 +1,7 @@
 /// Braille Unicode canvas for high-resolution terminal graphics.
 /// Each character cell represents a 2x4 pixel grid (8 dots).
 /// Unicode Braille patterns: U+2800 to U+28FF
+#[derive(Clone)]
 pub struct BrailleCanvas {
     width: usize,  // Characters
     height: usize, // Characters
