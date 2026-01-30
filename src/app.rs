@@ -343,22 +343,17 @@ impl App {
             // VERY aggressive spreading - fires spread like wildfire
             let should_check_spread = fire.intensity > 60;  // Even weak fires spread
             if should_check_spread {
-                let rand_val = rand_simple(hash3(
-                    (fire.lon * 1000.0) as u64,
-                    fire.intensity as u64,
-                    self.frame
-                ));
+                // Use both lon and lat for unique per-fire randomness
+                let lon_bits = (fire.lon * 10000.0).to_bits();
+                let lat_bits = (fire.lat * 10000.0).to_bits();
+                let rand_val = rand_simple(hash3(lon_bits, lat_bits, self.frame));
                 if rand_val > 0.85 {  // Much more frequent spreading (was 0.92)
                     // Spawn 1-3 spread fires per spread event
-                    let num_spreads = if rand_simple(hash2(
-                        (fire.lat * 1000.0) as u64,
-                        self.frame
-                    )) > 0.7 { 2 } else { 1 };
+                    let num_spreads = if rand_simple(hash3(lat_bits, lon_bits, self.frame)) > 0.7 { 2 } else { 1 };
 
                     for s in 0..num_spreads {
-                        let lat_seed = (fire.lat * 1000.0) as u64;
-                        let spread_dist = 0.04 + rand_simple(hash3(lat_seed, 7777, s as u64)) * 0.12;
-                        let angle = rand_simple(hash2(lat_seed, s as u64)) * std::f64::consts::TAU;
+                        let spread_dist = 0.04 + rand_simple(hash3(lat_bits, lon_bits, s as u64)) * 0.12;
+                        let angle = rand_simple(hash3(lon_bits, lat_bits, (s as u64).wrapping_add(9999))) * std::f64::consts::TAU;
 
                         let new_lon = fire.lon + spread_dist * angle.cos();
                         let new_lat = fire.lat + spread_dist * angle.sin();
@@ -483,16 +478,6 @@ fn haversine_km(lon1: f64, lat1: f64, lon2: f64, lat2: f64) -> f64 {
     let a = (dlat / 2.0).sin().powi(2) + lat1.cos() * lat2.cos() * (dlon / 2.0).sin().powi(2);
     let c = 2.0 * a.sqrt().asin();
     r * c
-}
-
-/// Fast 2-value hash with xorshift
-#[inline(always)]
-fn hash2(a: u64, b: u64) -> u64 {
-    let mut seed = a.wrapping_mul(2654435761).wrapping_add(b.wrapping_mul(2246822519));
-    seed ^= seed << 13;
-    seed ^= seed >> 7;
-    seed ^= seed << 17;
-    seed
 }
 
 /// Fast 3-value hash with xorshift
