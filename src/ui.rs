@@ -141,12 +141,40 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
         fires.truncate(MAX_VISIBLE_FIRES);
     }
 
+    // Convert debris to screen coordinates with culling and wrapping
+    let mut debris_particles: Vec<DebrisRender> = Vec::new();
+    for particle in &app.debris {
+        // Try normal position and wrapped positions
+        for &offset in &[0.0, -360.0, 360.0] {
+            let ((px, py), _) = viewport.project_wrapped(particle.lon, particle.lat, offset);
+
+            // Early rejection: negative coords or out of bounds
+            if px < 0 || py < 0 {
+                continue;
+            }
+
+            let cx = (px / 2) as u16;
+            let cy = (py / 4) as u16;
+
+            if cx < inner.width && cy < inner.height {
+                debris_particles.push(DebrisRender { x: cx, y: cy, life: particle.life });
+            }
+        }
+    }
+
+    // Limit debris
+    const MAX_VISIBLE_DEBRIS: usize = 300;
+    if debris_particles.len() > MAX_VISIBLE_DEBRIS {
+        debris_particles.truncate(MAX_VISIBLE_DEBRIS);
+    }
+
     // Render braille map
     let map_widget = MapWidget {
         layers,
         cursor_pos,
         explosions,
         fires,
+        debris: debris_particles,
         has_states: app.map_renderer.settings.show_states,
         zoom: viewport.zoom,
         inner_width: inner.width,
@@ -170,12 +198,20 @@ struct FireRender {
     intensity: u8,
 }
 
+/// A debris particle to render
+struct DebrisRender {
+    x: u16,
+    y: u16,
+    life: u8,
+}
+
 /// Custom widget that renders braille map with text labels overlaid
 struct MapWidget {
     layers: MapLayers,
     cursor_pos: Option<(u16, u16)>,
     explosions: Vec<ExplosionRender>,
     fires: Vec<FireRender>,
+    debris: Vec<DebrisRender>,
     has_states: bool,
     zoom: f64,
     inner_width: u16,
@@ -264,18 +300,70 @@ impl Widget for MapWidget {
             }
         }
 
-        // Render fires
+        // Render debris particles
+        for particle in &self.debris {
+            let x = area.x + particle.x;
+            let y = area.y + particle.y;
+            if x < area.x + area.width && y < area.y + area.height {
+                // Debris fades as it loses life
+                let fade = (particle.life as f32 / 50.0).min(1.0);
+                let r = (180.0 * fade) as u8;
+                let g = (160.0 * fade) as u8;
+                let b = (140.0 * fade) as u8;
+
+                // Different characters based on remaining life
+                let ch = if particle.life > 40 {
+                    '▪'  // Solid block
+                } else if particle.life > 25 {
+                    '•'  // Bullet
+                } else if particle.life > 10 {
+                    '·'  // Small dot
+                } else {
+                    ','  // Tiny speck
+                };
+
+                buf[(x, y)].set_char(ch).set_fg(Color::Rgb(r, g, b));
+            }
+        }
+
+        // Render fires with flickering RGB gradients
         for fire in &self.fires {
             let x = area.x + fire.x;
             let y = area.y + fire.y;
             if x < area.x + area.width && y < area.y + area.height {
-                let ch = if fire.intensity > 150 { '▓' } else if fire.intensity > 75 { '▒' } else { '░' };
-                let color = if fire.intensity > 100 { Color::Yellow } else { Color::Red };
-                buf[(x, y)].set_char(ch).set_fg(color);
+                // Flickering: add pseudo-random variation to intensity
+                let flicker = ((fire.x as u32 * 97 + fire.y as u32 * 31) % 20) as u8;
+                let visual_intensity = fire.intensity.saturating_add(flicker).saturating_sub(10);
+
+                // RGB fire gradient: white (hottest) → yellow → orange → red → dark red
+                let (r, g, b, ch) = if visual_intensity > 220 {
+                    // White hot core
+                    (255, 255, 200, '█')
+                } else if visual_intensity > 180 {
+                    // Bright yellow flames
+                    (255, 220, 0, '▓')
+                } else if visual_intensity > 140 {
+                    // Orange flames
+                    (255, 140, 0, '▓')
+                } else if visual_intensity > 100 {
+                    // Orange-red
+                    (255, 80, 0, '▒')
+                } else if visual_intensity > 60 {
+                    // Red
+                    (220, 20, 0, '▒')
+                } else if visual_intensity > 30 {
+                    // Dark red embers
+                    (160, 10, 0, '░')
+                } else {
+                    // Dying embers
+                    (100, 5, 0, '·')
+                };
+
+                buf[(x, y)].set_char(ch).set_fg(Color::Rgb(r, g, b));
             }
         }
 
-        // Render explosions with smooth gradient mushroom cloud
+        // Render explosions with RGB gradient mushroom cloud and shockwave
         for exp in &self.explosions {
             let x = area.x + exp.x;
             let y = area.y + exp.y;
@@ -283,22 +371,23 @@ impl Widget for MapWidget {
             // Explosion expands based on frame, up to actual blast radius
             let progress = (exp.frame as f32 / 15.0).min(1.0);
             let max_r = exp.radius as f32 * progress;
-            let max_r_sq = max_r * max_r; // Use squared distance to avoid sqrt
+            let max_r_sq = max_r * max_r;
 
             // Precompute stem boundaries
             let stem_height = (max_r * 0.6) as i16;
             let stem_width = (max_r * 0.3) as i16;
 
-            // Precompute color thresholds squared
-            let inner_threshold_sq = (max_r * 0.3) * (max_r * 0.3);
-            let mid_threshold_sq = (max_r * 0.6) * (max_r * 0.6);
+            // Animation phases
+            let flash_phase = exp.frame < 3;     // Initial white flash
+            let fireball_phase = exp.frame < 8;  // Bright fireball
+            let cooling_phase = exp.frame < 15;  // Cooling smoke
 
-            // Draw mushroom cloud shape - wider at top, stem below
+            // Draw mushroom cloud shape
             let radius_i16 = exp.radius as i16;
             for dy in -(radius_i16 + 2)..=(radius_i16) {
                 let py = (y as i16 + dy) as u16;
 
-                // Skip entire row if off-screen (y-axis culling)
+                // Skip entire row if off-screen
                 if py < area.y || py >= area.y + area.height {
                     continue;
                 }
@@ -306,31 +395,92 @@ impl Widget for MapWidget {
                 let dy_sq = dy * dy;
 
                 for dx in -(radius_i16)..=(radius_i16) {
-                    // Use squared distance to avoid expensive sqrt
                     let dist_sq = (dx * dx + dy_sq) as f32;
 
                     // Mushroom cap (top half, wider)
                     let in_cap = dy <= 0 && dist_sq <= max_r_sq;
-                    // Stem (bottom, narrower) - no distance calc needed
+                    // Stem (bottom, narrower)
                     let in_stem = dy > 0 && dy <= stem_height && dx.abs() <= stem_width;
 
                     if in_cap || in_stem {
                         let px = (x as i16 + dx) as u16;
 
-                        // Bounds check x-axis only (y already checked in outer loop)
+                        // Bounds check x-axis only
                         if px < area.x || px >= area.x + area.width {
                             continue;
                         }
 
-                        // Color based on squared distance from center
-                        let (ch, color) = if dist_sq < inner_threshold_sq {
-                            if exp.frame < 8 { ('*', Color::White) } else { ('☢', Color::Red) }
-                        } else if dist_sq < mid_threshold_sq {
-                            ('█', Color::Yellow)
+                        // Calculate normalized distance from center (0.0 = center, 1.0 = edge)
+                        let dist_norm = if in_stem {
+                            (dx.abs() as f32 / stem_width.max(1) as f32).min(1.0)
                         } else {
-                            ('░', Color::Red)
+                            (dist_sq.sqrt() / max_r).min(1.0)
                         };
-                        buf[(px, py)].set_char(ch).set_fg(color);
+
+                        // Flickering based on position (deterministic)
+                        let flicker = ((px as u32 * 97 + py as u32 * 31 + exp.frame as u32 * 13) % 20) as f32 / 20.0;
+
+                        // RGB gradient with phase-based coloring
+                        let (r, g, b, ch) = if flash_phase {
+                            // Initial flash: white hot
+                            if dist_norm < 0.5 {
+                                (255, 255, 255, '█')
+                            } else {
+                                (255, 240, 200, '▓')
+                            }
+                        } else if fireball_phase {
+                            // Fireball: center white → yellow → orange → red
+                            if dist_norm < 0.2 {
+                                (255, 255, 240, '█')  // White core
+                            } else if dist_norm < 0.4 {
+                                (255, 250, 100, '▓')  // Bright yellow
+                            } else if dist_norm < 0.6 {
+                                (255, 180, 20, '▓')   // Orange
+                            } else if dist_norm < 0.8 {
+                                (255, 80, 0, '▒')     // Red-orange
+                            } else {
+                                (200, 40, 0, '░')     // Dark red smoke
+                            }
+                        } else if cooling_phase {
+                            // Cooling: orange/red → dark smoke with radioactive core
+                            if dist_norm < 0.15 {
+                                // Radioactive core
+                                let pulse = if exp.frame % 2 == 0 { 30 } else { 0 };
+                                (255, pulse, 30, '☢')
+                            } else if dist_norm < 0.4 {
+                                (220 - (flicker * 40.0) as u8, 60, 0, '▓')  // Flickering orange
+                            } else if dist_norm < 0.7 {
+                                (160, 40, 0, '▒')     // Dark orange
+                            } else {
+                                (100, 20, 0, '░')     // Brown smoke
+                            }
+                        } else {
+                            // Final phase: dark smoke
+                            (80, 15, 0, '░')
+                        };
+
+                        buf[(px, py)].set_char(ch).set_fg(Color::Rgb(r, g, b));
+                    }
+                }
+            }
+
+            // Add expanding shockwave ring (first few frames only)
+            if exp.frame < 6 {
+                let ring_radius = (exp.frame as f32 * max_r / 5.0) as i16;
+
+                for angle_step in 0..24 {
+                    let angle = (angle_step as f32 / 24.0) * std::f32::consts::TAU;
+                    let ring_x = (x as i16 + (ring_radius as f32 * angle.cos()) as i16) as u16;
+                    let ring_y = (y as i16 + (ring_radius as f32 * angle.sin()) as i16) as u16;
+
+                    if ring_x >= area.x && ring_x < area.x + area.width &&
+                       ring_y >= area.y && ring_y < area.y + area.height {
+                        // Shockwave: bright yellow-white
+                        let fade = 1.0 - (exp.frame as f32 / 6.0);
+                        let r = (255.0 * fade) as u8;
+                        let g = (240.0 * fade) as u8;
+                        let b = (200.0 * fade) as u8;
+                        buf[(ring_x, ring_y)].set_char('○').set_fg(Color::Rgb(r, g, b));
                     }
                 }
             }

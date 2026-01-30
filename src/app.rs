@@ -17,6 +17,16 @@ pub struct Fire {
     pub intensity: u8, // 0-255, decays over time
 }
 
+/// Flying debris particle
+#[derive(Clone)]
+pub struct Debris {
+    pub lon: f64,
+    pub lat: f64,
+    pub vel_lon: f64,  // Velocity in degrees per frame
+    pub vel_lat: f64,
+    pub life: u8,      // Lifetime remaining
+}
+
 /// Radioactive fallout zone
 #[derive(Clone)]
 pub struct Fallout {
@@ -39,6 +49,8 @@ pub struct App {
     pub explosions: Vec<Explosion>,
     /// Active fires
     pub fires: Vec<Fire>,
+    /// Flying debris
+    pub debris: Vec<Debris>,
     /// Fallout zones
     pub fallout: Vec<Fallout>,
     /// Total casualties
@@ -62,6 +74,7 @@ impl App {
             mouse_pos: None,
             explosions: Vec::new(),
             fires: Vec::new(),
+            debris: Vec::new(),
             fallout: Vec::new(),
             casualties: 0,
         }
@@ -217,6 +230,20 @@ impl App {
             intensity: 1000, // Lasts ~1000 frames
         });
 
+        // Spawn debris particles ejected from blast
+        let num_debris = (radius_km / 5.0) as usize + 10;
+        for i in 0..num_debris {
+            let angle = (i as f64 / num_debris as f64) * std::f64::consts::TAU;
+            let speed = 0.05 + rand_simple(i as u64 + 5000) * 0.15;  // degrees per frame
+            self.debris.push(Debris {
+                lon,
+                lat,
+                vel_lon: speed * angle.cos(),
+                vel_lat: speed * angle.sin(),
+                life: 30 + (rand_simple(i as u64 + 6000) * 20.0) as u8,  // 30-50 frames
+            });
+        }
+
         // Calculate immediate blast casualties
         self.apply_blast_damage(lon, lat, radius_km);
     }
@@ -322,7 +349,15 @@ impl App {
             self.apply_ongoing_damage(lon, lat, radius_km, rate);
         }
 
-        !self.explosions.is_empty() || !self.fires.is_empty() || !self.fallout.is_empty()
+        // Update debris - move and decay
+        self.debris.retain_mut(|particle| {
+            particle.lon += particle.vel_lon;
+            particle.lat += particle.vel_lat;
+            particle.life = particle.life.saturating_sub(1);
+            particle.life > 0
+        });
+
+        !self.explosions.is_empty() || !self.fires.is_empty() || !self.fallout.is_empty() || !self.debris.is_empty()
     }
 
     /// Apply ongoing damage (fire/fallout) - small percentage casualties
