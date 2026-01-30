@@ -24,6 +24,88 @@ fn format_population(pop: u64) -> String {
     }
 }
 
+/// A polygon with exterior ring and optional holes
+/// First ring is exterior, subsequent rings are holes
+#[derive(Clone)]
+pub struct Polygon {
+    pub rings: Vec<Vec<(f64, f64)>>,
+    pub bbox: (f64, f64, f64, f64), // min_lon, min_lat, max_lon, max_lat
+}
+
+impl Polygon {
+    pub fn new(rings: Vec<Vec<(f64, f64)>>) -> Self {
+        let (mut min_lon, mut max_lon) = (f64::MAX, f64::MIN);
+        let (mut min_lat, mut max_lat) = (f64::MAX, f64::MIN);
+
+        for ring in &rings {
+            for &(lon, lat) in ring {
+                min_lon = min_lon.min(lon);
+                max_lon = max_lon.max(lon);
+                min_lat = min_lat.min(lat);
+                max_lat = max_lat.max(lat);
+            }
+        }
+
+        Self {
+            rings,
+            bbox: (min_lon, min_lat, max_lon, max_lat),
+        }
+    }
+
+    /// Check if a point is inside this polygon using ray casting algorithm
+    pub fn contains(&self, lon: f64, lat: f64) -> bool {
+        // Quick bbox check first
+        if lon < self.bbox.0 || lon > self.bbox.2 || lat < self.bbox.1 || lat > self.bbox.3 {
+            return false;
+        }
+
+        if self.rings.is_empty() {
+            return false;
+        }
+
+        // Check if point is in exterior ring
+        let in_exterior = point_in_polygon(lon, lat, &self.rings[0]);
+
+        if !in_exterior {
+            return false;
+        }
+
+        // Check if point is in any hole (if so, it's not in the polygon)
+        for hole in &self.rings[1..] {
+            if point_in_polygon(lon, lat, hole) {
+                return false;
+            }
+        }
+
+        true
+    }
+}
+
+/// Ray casting algorithm for point-in-polygon test
+fn point_in_polygon(x: f64, y: f64, ring: &[(f64, f64)]) -> bool {
+    let mut inside = false;
+    let n = ring.len();
+
+    if n < 3 {
+        return false;
+    }
+
+    let mut j = n - 1;
+    for i in 0..n {
+        let xi = ring[i].0;
+        let yi = ring[i].1;
+        let xj = ring[j].0;
+        let yj = ring[j].1;
+
+        if ((yi > y) != (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi) {
+            inside = !inside;
+        }
+        j = i;
+    }
+
+    inside
+}
+
 /// A geographic line (sequence of lon/lat coordinates) with precomputed bounding box
 #[derive(Clone)]
 pub struct LineString {
@@ -82,6 +164,33 @@ pub struct City {
     pub population: u64,
     pub is_capital: bool,
     pub is_megacity: bool,
+    pub radius_km: f64, // Physical city radius based on population
+}
+
+/// Calculate city radius in km from population
+/// Based on typical urban density: ~10,000 people/km² for cities
+/// Radius = sqrt(population / (density * π))
+pub fn city_radius_from_population(population: u64) -> f64 {
+    if population == 0 {
+        return 0.0;
+    }
+
+    // Urban density varies by region, but ~10k/km² is reasonable average
+    // Megacities often lower density (~5k/km²) due to sprawl
+    let density = if population > 10_000_000 {
+        5000.0 // Megacity sprawl
+    } else if population > 1_000_000 {
+        8000.0 // Large city
+    } else if population > 100_000 {
+        10000.0 // Medium city
+    } else {
+        12000.0 // Small city/town (denser)
+    };
+
+    // Area = population / density
+    // Radius = sqrt(area / π)
+    let area_km2 = population as f64 / density;
+    (area_km2 / std::f64::consts::PI).sqrt().max(0.5) // At least 0.5km radius
 }
 
 /// Display settings for map layers
@@ -149,6 +258,55 @@ struct RenderCache {
     counties: BrailleCanvas,
 }
 
+/// Fast land/water lookup grid (1° resolution = 360x180 = 64,800 cells)
+/// Each cell is true if majority of cell is land
+pub struct LandGrid {
+    cells: Vec<bool>,
+}
+
+impl LandGrid {
+    pub fn new() -> Self {
+        Self {
+            cells: vec![false; 360 * 180], // 64,800 cells
+        }
+    }
+
+    /// Precompute land grid from polygons (call once at startup)
+    pub fn from_polygons(polygons: &[Polygon]) -> Self {
+        let mut grid = Self::new();
+
+        // Check each 1° cell
+        for lat_idx in 0..180 {
+            for lon_idx in 0..360 {
+                let lon = -180.0 + lon_idx as f64 + 0.5; // Cell center
+                let lat = -90.0 + lat_idx as f64 + 0.5;
+
+                // Check if cell center is in any polygon
+                for polygon in polygons {
+                    if polygon.contains(lon, lat) {
+                        let idx = lat_idx * 360 + lon_idx;
+                        grid.cells[idx] = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        grid
+    }
+
+    /// Fast O(1) land check
+    #[inline(always)]
+    pub fn is_land(&self, lon: f64, lat: f64) -> bool {
+        // Normalize coordinates
+        let lon = ((lon + 180.0).rem_euclid(360.0)) as usize;
+        let lat = ((lat + 90.0).clamp(0.0, 179.999)) as usize;
+
+        let idx = lat * 360 + lon;
+        self.cells.get(idx).copied().unwrap_or(false)
+    }
+}
+
 /// Map renderer with multi-resolution coastline data
 pub struct MapRenderer {
     pub coastlines_low: Vec<LineString>,
@@ -158,6 +316,10 @@ pub struct MapRenderer {
     pub borders_high: Vec<LineString>,
     pub states: Vec<LineString>,
     pub counties: Vec<LineString>,
+    pub land_polygons_low: Vec<Polygon>,
+    pub land_polygons_medium: Vec<Polygon>,
+    pub land_polygons_high: Vec<Polygon>,
+    pub land_grid: Option<LandGrid>,
     pub city_grid: SpatialGrid<City>,
     pub settings: DisplaySettings,
     cache: RefCell<Option<RenderCache>>,
@@ -175,6 +337,10 @@ impl MapRenderer {
             borders_high: Vec::new(),
             states: Vec::new(),
             counties: Vec::new(),
+            land_polygons_low: Vec::new(),
+            land_polygons_medium: Vec::new(),
+            land_polygons_high: Vec::new(),
+            land_grid: None,
             city_grid: SpatialGrid::new(10.0),
             settings: DisplaySettings::default(),
             cache: RefCell::new(None),
@@ -380,6 +546,7 @@ impl MapRenderer {
                 }
 
                 // Choose glyph based on city type and relative population
+                // Choose glyph based on city type and relative population
                 let ratio = city.population as f64 / max_pop.max(1) as f64;
                 let glyph = if city.is_capital {
                     '⚜' // National capital - fleur-de-lis
@@ -510,6 +677,7 @@ impl MapRenderer {
 
     /// Add a city marker
     pub fn add_city(&mut self, lon: f64, lat: f64, name: &str, population: u64, is_capital: bool, is_megacity: bool) {
+        let radius_km = city_radius_from_population(population);
         self.city_grid.insert(lon, lat, City {
             lon,
             lat,
@@ -517,7 +685,39 @@ impl MapRenderer {
             population,
             is_capital,
             is_megacity,
+            radius_km,
         });
+    }
+
+    /// Add land polygon for accurate land/water detection
+    pub fn add_land_polygon(&mut self, rings: Vec<Vec<(f64, f64)>>, lod: Lod) {
+        let polygon = Polygon::new(rings);
+        match lod {
+            Lod::Low => self.land_polygons_low.push(polygon),
+            Lod::Medium => self.land_polygons_medium.push(polygon),
+            Lod::High => self.land_polygons_high.push(polygon),
+        }
+    }
+
+    /// Build fast land/water lookup grid (call after loading all polygons)
+    pub fn build_land_grid(&mut self) {
+        // Use lowest resolution for grid building (faster, good enough for fire filtering)
+        if !self.land_polygons_low.is_empty() {
+            self.land_grid = Some(LandGrid::from_polygons(&self.land_polygons_low));
+        } else if !self.land_polygons_medium.is_empty() {
+            self.land_grid = Some(LandGrid::from_polygons(&self.land_polygons_medium));
+        }
+    }
+
+    /// Check if a point is on land (O(1) grid lookup)
+    #[inline(always)]
+    pub fn is_on_land(&self, lon: f64, lat: f64) -> bool {
+        if let Some(ref grid) = self.land_grid {
+            grid.is_land(lon, lat)
+        } else {
+            // Fallback: assume land if no grid available
+            true
+        }
     }
 
     /// Check if any data is loaded

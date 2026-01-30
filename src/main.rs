@@ -78,6 +78,9 @@ fn run(terminal: &mut DefaultTerminal) -> Result<()> {
         data::generate_simple_world(&mut app.map_renderer);
     }
 
+    // Build fast land/water lookup grid for O(1) fire filtering
+    app.map_renderer.build_land_grid();
+
     // Main loop
     loop {
         // Draw

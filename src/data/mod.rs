@@ -76,6 +76,22 @@ pub fn load_all_geojson(renderer: &mut MapRenderer, data_dir: &Path) -> Result<(
         }
     }
 
+    // Load land polygons for accurate land/water detection
+    let land_files = [
+        ("ne_110m_land.json", Lod::Low),
+        ("ne_50m_land.json", Lod::Medium),
+        ("ne_10m_land.json", Lod::High),
+    ];
+
+    for (filename, lod) in land_files {
+        let path = data_dir.join(filename);
+        if path.exists() {
+            if let Err(e) = load_land_polygons(renderer, &path, lod) {
+                eprintln!("Warning: Failed to load {}: {}", filename, e);
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -108,6 +124,14 @@ fn load_counties(renderer: &mut MapRenderer, path: &Path) -> Result<()> {
     let content = fs::read_to_string(path)?;
     let geojson: GeoJson = content.parse()?;
     process_geojson_lines(&geojson, |line| renderer.add_county(line));
+    Ok(())
+}
+
+/// Load land polygons for accurate land/water detection
+fn load_land_polygons(renderer: &mut MapRenderer, path: &Path, lod: Lod) -> Result<()> {
+    let content = fs::read_to_string(path)?;
+    let geojson: GeoJson = content.parse()?;
+    process_geojson_polygons(&geojson, |polygon| renderer.add_land_polygon(polygon, lod));
     Ok(())
 }
 
@@ -222,6 +246,61 @@ where
         Value::GeometryCollection(geometries) => {
             for g in geometries {
                 process_geometry_lines(g, add_line);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Process GeoJSON and extract polygon features
+fn process_geojson_polygons<F>(geojson: &GeoJson, mut add_polygon: F)
+where
+    F: FnMut(Vec<Vec<(f64, f64)>>),
+{
+    match geojson {
+        GeoJson::FeatureCollection(fc) => {
+            for feature in &fc.features {
+                if let Some(ref geometry) = feature.geometry {
+                    process_geometry_polygons(geometry, &mut add_polygon);
+                }
+            }
+        }
+        GeoJson::Feature(f) => {
+            if let Some(ref geometry) = f.geometry {
+                process_geometry_polygons(geometry, &mut add_polygon);
+            }
+        }
+        GeoJson::Geometry(geometry) => {
+            process_geometry_polygons(geometry, &mut add_polygon);
+        }
+    }
+}
+
+fn process_geometry_polygons<F>(geometry: &Geometry, add_polygon: &mut F)
+where
+    F: FnMut(Vec<Vec<(f64, f64)>>),
+{
+    match &geometry.value {
+        Value::Polygon(rings) => {
+            // Convert all rings (exterior + holes)
+            let polygon: Vec<Vec<(f64, f64)>> = rings
+                .iter()
+                .map(|ring| ring.iter().map(|c| (c[0], c[1])).collect())
+                .collect();
+            add_polygon(polygon);
+        }
+        Value::MultiPolygon(polygons) => {
+            for rings in polygons {
+                let polygon: Vec<Vec<(f64, f64)>> = rings
+                    .iter()
+                    .map(|ring| ring.iter().map(|c| (c[0], c[1])).collect())
+                    .collect();
+                add_polygon(polygon);
+            }
+        }
+        Value::GeometryCollection(geometries) => {
+            for g in geometries {
+                process_geometry_polygons(g, add_polygon);
             }
         }
         _ => {}
