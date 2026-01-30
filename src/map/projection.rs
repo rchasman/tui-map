@@ -70,22 +70,37 @@ impl Viewport {
 
     /// Zoom by factor towards a specific pixel location
     fn zoom_at(&mut self, px: i32, py: i32, factor: f64) {
-        // Get the geographic coordinates under the mouse
-        let (lon, lat) = self.unproject(px, py);
+        // Get the geographic coordinates under the mouse BEFORE zoom
+        let (target_lon, target_lat) = self.unproject(px, py);
 
         // Apply the zoom
         let new_zoom = (self.zoom * factor).clamp(1.0, 100.0);
         self.zoom = new_zoom;
 
-        // Calculate where that point would now project to
-        let (new_px, new_py) = self.project(lon, lat);
+        // Directly calculate the center needed to keep target point at (px, py)
+        // This avoids the pan() function's linear Mercator approximation
+        let scale = self.zoom * self.width as f64;
 
-        // Calculate the offset needed to bring it back under the mouse
-        let dx = new_px - px;
-        let dy = new_py - py;
+        // Longitude: solve center_x from px = ((x - center_x) * scale + width/2)
+        let x = (target_lon + 180.0) / 360.0;
+        let center_x = x - (px as f64 - self.width as f64 / 2.0) / scale;
+        self.center_lon = center_x * 360.0 - 180.0;
 
-        // Pan to compensate
-        self.pan(dx, dy);
+        // Latitude: use exact Mercator math (not linear approximation)
+        let lat_rad = target_lat * PI / 180.0;
+        let y = (1.0 - (lat_rad.tan() + 1.0 / lat_rad.cos()).ln() / PI) / 2.0;
+        let center_y = y - (py as f64 - self.height as f64 / 2.0) / scale;
+
+        // Inverse Mercator for center latitude
+        let new_center_lat_rad = (PI * (1.0 - 2.0 * center_y)).sinh().atan();
+        self.center_lat = (new_center_lat_rad * 180.0 / PI).clamp(-85.0, 85.0);
+
+        // Wrap longitude
+        if self.center_lon > 180.0 {
+            self.center_lon -= 360.0;
+        } else if self.center_lon < -180.0 {
+            self.center_lon += 360.0;
+        }
     }
 
     /// Unproject pixel coordinates back to geographic coordinates (lon, lat)
