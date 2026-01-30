@@ -125,11 +125,6 @@ impl Viewport {
         (lon, lat)
     }
 
-    /// Project a geographic coordinate (lon, lat) to pixel coordinates
-    pub fn project(&self, lon: f64, lat: f64) -> (i32, i32) {
-        self.project_wrapped(lon, lat, 0.0).0
-    }
-
     /// Project with explicit longitude offset (for wrapping)
     /// Returns (pixel_coords, normalized_lon)
     pub fn project_wrapped(&self, lon: f64, lat: f64, lon_offset: f64) -> ((i32, i32), f64) {
@@ -183,7 +178,7 @@ mod tests {
     #[test]
     fn test_project_center() {
         let vp = Viewport::new(0.0, 0.0, 1.0, 100, 100);
-        let (x, y) = vp.project(0.0, 0.0);
+        let ((x, y), _) = vp.project_wrapped(0.0, 0.0, 0.0);
         assert_eq!(x, 50);
         assert_eq!(y, 50);
     }
