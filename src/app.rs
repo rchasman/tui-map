@@ -197,18 +197,32 @@ impl App {
             radius_km,
         });
 
-        // Spawn fires around the blast perimeter
-        let num_fires = (radius_km / 10.0) as usize + 5;
+        // Spawn fires throughout the blast zone (not just perimeter)
+        // More fires for larger blasts
+        let num_fires = (radius_km / 5.0) as usize + 15;
+
         for i in 0..num_fires {
-            let angle = (i as f64 / num_fires as f64) * std::f64::consts::TAU;
-            let dist = radius_km * (0.5 + rand_simple(i as u64) * 0.8);
+            // Completely random angle
+            let angle = rand_simple(i as u64 * 7919) * std::f64::consts::TAU;
+
+            // Random distance using sqrt for uniform 2D distribution
+            // This fills the entire circle, not just a ring
+            let rand_dist = rand_simple(i as u64 * 6547);
+            let dist = radius_km * rand_dist.sqrt() * (0.3 + rand_simple(i as u64 * 8191) * 1.5);
+
             // Convert km to degrees (rough approximation)
             let dlat = (dist * angle.sin()) / 111.0;
             let dlon = (dist * angle.cos()) / (111.0 * lat.to_radians().cos().max(0.1));
+
+            // Vary intensity based on distance from center (hotter near center)
+            let center_factor = 1.0 - (dist / (radius_km * 1.5)).min(1.0);
+            let base_intensity = 150.0 + center_factor * 80.0;
+            let intensity = (base_intensity + rand_simple(i as u64 + 1000) * 50.0).min(255.0) as u8;
+
             self.fires.push(Fire {
                 lon: lon + dlon,
                 lat: lat + dlat,
-                intensity: 200 + (rand_simple(i as u64 + 1000) * 55.0) as u8,
+                intensity,
             });
         }
 
