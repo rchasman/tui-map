@@ -119,3 +119,58 @@ impl<T> SpatialGrid<T> {
         self.items.is_empty()
     }
 }
+
+/// Spatial index for geographic features using conservative approximation.
+/// Each feature's bounding box is indexed into every cell it overlaps,
+/// guaranteeing no false negatives while allowing false positives
+/// (eliminated by downstream bbox checks in draw_linestring).
+pub struct FeatureGrid {
+    cells: HashMap<(i32, i32), Vec<usize>>,
+    cell_size: f64,
+}
+
+impl FeatureGrid {
+    pub fn new(cell_size: f64) -> Self {
+        Self {
+            cells: HashMap::new(),
+            cell_size,
+        }
+    }
+
+    #[inline(always)]
+    fn to_cell(&self, lon: f64, lat: f64) -> (i32, i32) {
+        let x = (lon / self.cell_size).floor() as i32;
+        let y = (lat / self.cell_size).floor() as i32;
+        (x, y)
+    }
+
+    /// Build from feature bounding boxes (conservative approximation:
+    /// each feature inserted into every cell its bbox overlaps)
+    pub fn build(bboxes: impl Iterator<Item = (f64, f64, f64, f64)>, cell_size: f64) -> Self {
+        let mut grid = Self::new(cell_size);
+        for (idx, (min_lon, min_lat, max_lon, max_lat)) in bboxes.enumerate() {
+            let min_cell = grid.to_cell(min_lon, min_lat);
+            let max_cell = grid.to_cell(max_lon, max_lat);
+            for y in min_cell.1..=max_cell.1 {
+                for x in min_cell.0..=max_cell.0 {
+                    grid.cells.entry((x, y)).or_default().push(idx);
+                }
+            }
+        }
+        grid
+    }
+
+    /// Append feature indices for the given bounds into results vec.
+    /// May contain duplicates; caller should dedup after all queries.
+    pub fn query_into(&self, min_lon: f64, min_lat: f64, max_lon: f64, max_lat: f64, results: &mut Vec<usize>) {
+        let min_cell = self.to_cell(min_lon, min_lat);
+        let max_cell = self.to_cell(max_lon, max_lat);
+        for y in min_cell.1..=max_cell.1 {
+            for x in min_cell.0..=max_cell.0 {
+                if let Some(indices) = self.cells.get(&(x, y)) {
+                    results.extend_from_slice(indices);
+                }
+            }
+        }
+    }
+}

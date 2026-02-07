@@ -78,8 +78,9 @@ fn run(terminal: &mut DefaultTerminal) -> Result<()> {
         data::generate_simple_world(&mut app.map_renderer);
     }
 
-    // Build fast land/water lookup grid for O(1) fire filtering
+    // Build spatial indexes: land grid for fire filtering, feature grids for viewport queries
     app.map_renderer.build_land_grid();
+    app.map_renderer.build_spatial_indexes();
 
     // Main loop
     loop {
@@ -140,6 +141,8 @@ fn run(terminal: &mut DefaultTerminal) -> Result<()> {
                                 if !app.map_renderer.has_data() {
                                     data::generate_simple_world(&mut app.map_renderer);
                                 }
+                                app.map_renderer.build_land_grid();
+                                app.map_renderer.build_spatial_indexes();
                             }
 
                             _ => {}

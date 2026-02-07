@@ -1,7 +1,7 @@
 use crate::braille::BrailleCanvas;
 use crate::map::geometry::draw_line;
 use crate::map::projection::Viewport;
-use crate::map::spatial::SpatialGrid;
+use crate::map::spatial::{FeatureGrid, SpatialGrid};
 use std::cell::RefCell;
 
 /// Rendered map layers with separate canvases for color differentiation
@@ -396,12 +396,18 @@ pub struct MapRenderer {
     pub city_grid: SpatialGrid<City>,
     pub settings: DisplaySettings,
     cache: RefCell<Option<RenderCache>>,
+    // Conservative-approximation spatial indexes for O(1) viewport queries
+    coastline_grid_low: FeatureGrid,
+    coastline_grid_medium: FeatureGrid,
+    coastline_grid_high: FeatureGrid,
+    border_grid_medium: FeatureGrid,
+    border_grid_high: FeatureGrid,
+    state_grid: FeatureGrid,
+    county_grid: FeatureGrid,
 }
 
 impl MapRenderer {
     pub fn new() -> Self {
-        // Use 10° cells: 36 columns x 18 rows = 648 cells for the world
-        // Good balance between memory and query performance
         Self {
             coastlines_low: Vec::new(),
             coastlines_medium: Vec::new(),
@@ -417,6 +423,13 @@ impl MapRenderer {
             city_grid: SpatialGrid::new(10.0),
             settings: DisplaySettings::default(),
             cache: RefCell::new(None),
+            coastline_grid_low: FeatureGrid::new(5.0),
+            coastline_grid_medium: FeatureGrid::new(5.0),
+            coastline_grid_high: FeatureGrid::new(5.0),
+            border_grid_medium: FeatureGrid::new(5.0),
+            border_grid_high: FeatureGrid::new(5.0),
+            state_grid: FeatureGrid::new(5.0),
+            county_grid: FeatureGrid::new(5.0),
         }
     }
 
@@ -457,6 +470,85 @@ impl MapRenderer {
         }
     }
 
+    /// Get spatial index for coastlines at given LOD (mirrors get_coastlines fallback)
+    fn get_coastline_grid(&self, lod: Lod) -> &FeatureGrid {
+        match lod {
+            Lod::High => {
+                if !self.coastlines_high.is_empty() {
+                    &self.coastline_grid_high
+                } else if !self.coastlines_medium.is_empty() {
+                    &self.coastline_grid_medium
+                } else {
+                    &self.coastline_grid_low
+                }
+            }
+            Lod::Medium => {
+                if !self.coastlines_medium.is_empty() {
+                    &self.coastline_grid_medium
+                } else {
+                    &self.coastline_grid_low
+                }
+            }
+            Lod::Low => &self.coastline_grid_low,
+        }
+    }
+
+    /// Get spatial index for borders at given LOD (mirrors get_borders fallback)
+    fn get_border_grid(&self, lod: Lod) -> &FeatureGrid {
+        match lod {
+            Lod::High => {
+                if !self.borders_high.is_empty() {
+                    &self.border_grid_high
+                } else {
+                    &self.border_grid_medium
+                }
+            }
+            _ => &self.border_grid_medium,
+        }
+    }
+
+    /// Query a FeatureGrid with date-line wrapping support.
+    /// Returns deduplicated feature indices.
+    fn query_grid_wrapped(grid: &FeatureGrid, min_lon: f64, min_lat: f64, max_lon: f64, max_lat: f64) -> Vec<usize> {
+        let mut candidates = Vec::new();
+        grid.query_into(min_lon.max(-180.0), min_lat, max_lon.min(180.0), max_lat, &mut candidates);
+        if min_lon < -180.0 {
+            grid.query_into(min_lon + 360.0, min_lat, 180.0, max_lat, &mut candidates);
+        }
+        if max_lon > 180.0 {
+            grid.query_into(-180.0, min_lat, max_lon - 360.0, max_lat, &mut candidates);
+        }
+        candidates.sort_unstable();
+        candidates.dedup();
+        candidates
+    }
+
+    /// Build spatial indexes for all feature collections (call after loading data)
+    pub fn build_spatial_indexes(&mut self) {
+        const CELL_SIZE: f64 = 5.0;
+        self.coastline_grid_low = FeatureGrid::build(
+            self.coastlines_low.iter().map(|l| l.bbox), CELL_SIZE,
+        );
+        self.coastline_grid_medium = FeatureGrid::build(
+            self.coastlines_medium.iter().map(|l| l.bbox), CELL_SIZE,
+        );
+        self.coastline_grid_high = FeatureGrid::build(
+            self.coastlines_high.iter().map(|l| l.bbox), CELL_SIZE,
+        );
+        self.border_grid_medium = FeatureGrid::build(
+            self.borders_medium.iter().map(|l| l.bbox), CELL_SIZE,
+        );
+        self.border_grid_high = FeatureGrid::build(
+            self.borders_high.iter().map(|l| l.bbox), CELL_SIZE,
+        );
+        self.state_grid = FeatureGrid::build(
+            self.states.iter().map(|l| l.bbox), CELL_SIZE,
+        );
+        self.county_grid = FeatureGrid::build(
+            self.counties.iter().map(|l| l.bbox), CELL_SIZE,
+        );
+    }
+
     /// Get max number of cities to show based on zoom
     fn max_cities_for_zoom(zoom: f64) -> usize {
         if zoom > 20.0 {
@@ -483,13 +575,18 @@ impl MapRenderer {
         let lod = Lod::from_zoom(viewport.zoom);
         let mut labels = Vec::new();
 
+        // Viewport geographic bounds (reused for spatial queries + city filtering)
+        let vp_min_lon = viewport.center_lon - (180.0 / viewport.zoom);
+        let vp_max_lon = viewport.center_lon + (180.0 / viewport.zoom);
+        let vp_min_lat = (viewport.center_lat - (90.0 / viewport.zoom)).max(-85.0);
+        let vp_max_lat = (viewport.center_lat + (90.0 / viewport.zoom)).min(85.0);
+
         // Check if we can use cached static layers
         let cache_key = RenderCacheKey::from_viewport(viewport, width, height, &self.settings);
         let cache_borrow = self.cache.borrow();
         let use_cache = cache_borrow.as_ref().map(|c| c.key == cache_key).unwrap_or(false);
 
         let (coastlines_canvas, borders_canvas, states_canvas, counties_canvas) = if use_cache {
-            // Use cached canvases (clone is cheap for braille - just Vec<Vec<u8>>)
             let cache = cache_borrow.as_ref().unwrap();
             (
                 cache.coastlines.clone(),
@@ -498,45 +595,47 @@ impl MapRenderer {
                 cache.counties.clone(),
             )
         } else {
-            drop(cache_borrow); // Release borrow before updating
+            drop(cache_borrow);
 
-            // Render static layers from scratch
             let mut coastlines_canvas = BrailleCanvas::new(width, height);
             let mut borders_canvas = BrailleCanvas::new(width, height);
             let mut states_canvas = BrailleCanvas::new(width, height);
             let mut counties_canvas = BrailleCanvas::new(width, height);
 
-            // Draw coastlines (Cyan - base map)
+            // Coarse filter: spatial index query → candidate features
+            // Fine filter: draw_linestring's bbox check eliminates false positives
             if self.settings.show_coastlines {
                 let coastlines = self.get_coastlines(lod);
-                for line in coastlines {
-                    self.draw_linestring(&mut coastlines_canvas, line, viewport);
+                let grid = self.get_coastline_grid(lod);
+                let candidates = Self::query_grid_wrapped(grid, vp_min_lon, vp_min_lat, vp_max_lon, vp_max_lat);
+                for &idx in &candidates {
+                    self.draw_linestring(&mut coastlines_canvas, &coastlines[idx], viewport);
                 }
             }
 
-            // Draw country borders (master toggle for all political boundaries)
             if self.settings.show_borders {
                 let borders = self.get_borders(lod);
-                for line in borders {
-                    self.draw_linestring(&mut borders_canvas, line, viewport);
+                let grid = self.get_border_grid(lod);
+                let candidates = Self::query_grid_wrapped(grid, vp_min_lon, vp_min_lat, vp_max_lon, vp_max_lat);
+                for &idx in &candidates {
+                    self.draw_linestring(&mut borders_canvas, &borders[idx], viewport);
                 }
 
-                // Draw state/province borders (sub-toggle, visible at zoom >= 4.0)
                 if self.settings.show_states && viewport.zoom >= 4.0 {
-                    for line in &self.states {
-                        self.draw_linestring(&mut states_canvas, line, viewport);
+                    let candidates = Self::query_grid_wrapped(&self.state_grid, vp_min_lon, vp_min_lat, vp_max_lon, vp_max_lat);
+                    for &idx in &candidates {
+                        self.draw_linestring(&mut states_canvas, &self.states[idx], viewport);
                     }
                 }
 
-                // Draw county borders (sub-toggle, visible at zoom >= 8.0)
                 if self.settings.show_counties && viewport.zoom >= 8.0 {
-                    for line in &self.counties {
-                        self.draw_linestring(&mut counties_canvas, line, viewport);
+                    let candidates = Self::query_grid_wrapped(&self.county_grid, vp_min_lon, vp_min_lat, vp_max_lon, vp_max_lat);
+                    for &idx in &candidates {
+                        self.draw_linestring(&mut counties_canvas, &self.counties[idx], viewport);
                     }
                 }
             }
 
-            // Update cache
             *self.cache.borrow_mut() = Some(RenderCache {
                 key: cache_key,
                 coastlines: coastlines_canvas.clone(),
@@ -550,11 +649,6 @@ impl MapRenderer {
 
         // Collect cities for glyph rendering (viewport-aware filtering with wrapping)
         if self.settings.show_cities {
-            // Calculate viewport bounds in geographic coordinates
-            let vp_min_lon = viewport.center_lon - (180.0 / viewport.zoom);
-            let vp_max_lon = viewport.center_lon + (180.0 / viewport.zoom);
-            let vp_min_lat = (viewport.center_lat - (90.0 / viewport.zoom)).max(-85.0);
-            let vp_max_lat = (viewport.center_lat + (90.0 / viewport.zoom)).min(85.0);
 
             // Query spatial grid for cities in viewport (with wrapping)
             let mut candidate_indices = Vec::new();
