@@ -31,10 +31,10 @@ pub struct Fallout {
 /// coarse (1°) for zoomed-out, fine (0.25°) for medium zoom.
 pub struct FireGrid {
     /// Max intensity per cell (0 = no fire)
-    cells: Vec<u8>,
-    width: usize,
-    height: usize,
-    resolution: f64,
+    pub cells: Vec<u8>,
+    pub width: usize,
+    pub height: usize,
+    pub resolution: f64,
 }
 
 impl FireGrid {
@@ -459,30 +459,22 @@ impl App {
             zone.intensity > 0
         });
 
-        // Apply ongoing damage only every 10 frames for massive performance boost
-        // Fires and fallout are gradual effects - skipping frames is imperceptible
+        // Apply ongoing damage every 10 frames (imperceptible skip)
+        // Flipped join: iterate cities and probe fire grid, not fires → city query.
+        // O(7K cities) with O(1) grid lookups instead of O(25K fires) with HashMap queries.
         if self.frame % 10 == 0 {
-            // Pre-allocate damage zones vector
-            let mut damage_zones = Vec::with_capacity(self.fires.len() / 10 + self.fallout.len());
+            self.apply_fire_damage_to_cities();
 
-            // Collect damage zones from fires (only strong fires cause damage)
-            for fire in &self.fires {
-                if fire.intensity > 50 {
-                    damage_zones.push((fire.lon, fire.lat, 20.0, 0.01)); // 1% per 10 frames (same rate)
-                }
-            }
-
-            // Fallout causes gradual casualties
-            for zone in &self.fallout {
+            // Fallout damage (few zones, keep the per-zone city query)
+            for i in 0..self.fallout.len() {
+                let zone = &self.fallout[i];
                 if zone.intensity > 0 {
-                    let damage_rate = (zone.intensity as f64 / 10000.0) * 0.05; // 10x per tick (same total rate)
-                    damage_zones.push((zone.lon, zone.lat, zone.radius_km, damage_rate));
+                    let rate = (zone.intensity as f64 / 10000.0) * 0.05;
+                    let lon = zone.lon;
+                    let lat = zone.lat;
+                    let radius_km = zone.radius_km;
+                    self.apply_ongoing_damage(lon, lat, radius_km, rate);
                 }
-            }
-
-            // Apply all ongoing damage
-            for (lon, lat, radius_km, rate) in damage_zones {
-                self.apply_ongoing_damage(lon, lat, radius_km, rate);
             }
         }
 
@@ -491,6 +483,42 @@ impl App {
         self.fire_grid_fine.rebuild(&self.fires);
 
         !self.explosions.is_empty() || !self.fires.is_empty() || !self.fallout.is_empty()
+    }
+
+    /// Flipped join: for each city, probe the fire grid to check if it's burning.
+    /// O(cities) with O(1) array lookups vs the old O(fires) with HashMap queries.
+    fn apply_fire_damage_to_cities(&mut self) {
+        let rate = 0.01; // 1% per 10 frames
+        for idx in 0..self.map_renderer.city_grid.len() {
+            let (lon, lat, pop) = {
+                let city = match self.map_renderer.city_grid.get(idx) {
+                    Some(c) => c,
+                    None => continue,
+                };
+                if city.population == 0 {
+                    continue;
+                }
+                (city.lon, city.lat, city.population)
+            };
+
+            // Probe the fine fire grid at city location — O(1) flat array lookup
+            let lon_idx = ((lon + 180.0).rem_euclid(360.0) / 0.25) as usize;
+            let lat_idx = ((lat + 90.0).clamp(0.0, 179.999) / 0.25) as usize;
+            let grid_idx = lat_idx * self.fire_grid_fine.width + lon_idx;
+            let intensity = if grid_idx < self.fire_grid_fine.cells.len() {
+                self.fire_grid_fine.cells[grid_idx]
+            } else {
+                0
+            };
+
+            if intensity > 50 {
+                let damage = ((pop as f64 * rate) as u64).max(1);
+                if let Some(city) = self.map_renderer.city_grid.get_mut(idx) {
+                    city.population = city.population.saturating_sub(damage);
+                    self.casualties += damage;
+                }
+            }
+        }
     }
 
     /// Apply ongoing damage (fire/fallout) - small percentage casualties
