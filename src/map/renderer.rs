@@ -575,11 +575,18 @@ impl MapRenderer {
         let lod = Lod::from_zoom(viewport.zoom);
         let mut labels = Vec::new();
 
-        // Viewport geographic bounds (reused for spatial queries + city filtering)
+        // Viewport geographic bounds (for city filtering)
         let vp_min_lon = viewport.center_lon - (180.0 / viewport.zoom);
         let vp_max_lon = viewport.center_lon + (180.0 / viewport.zoom);
         let vp_min_lat = (viewport.center_lat - (90.0 / viewport.zoom)).max(-85.0);
         let vp_max_lat = (viewport.center_lat + (90.0 / viewport.zoom)).min(85.0);
+
+        // Padded bounds for FeatureGrid queries: accounts for Mercator lat
+        // distortion and draw_linestring's 50px screen-space edge padding
+        let fg_min_lon = vp_min_lon - 5.0;
+        let fg_max_lon = vp_max_lon + 5.0;
+        let fg_min_lat = (vp_min_lat - 5.0).max(-90.0);
+        let fg_max_lat = (vp_max_lat + 5.0).min(90.0);
 
         // Check if we can use cached static layers
         let cache_key = RenderCacheKey::from_viewport(viewport, width, height, &self.settings);
@@ -602,12 +609,12 @@ impl MapRenderer {
             let mut states_canvas = BrailleCanvas::new(width, height);
             let mut counties_canvas = BrailleCanvas::new(width, height);
 
-            // Coarse filter: spatial index query → candidate features
+            // Coarse filter: spatial index query (padded) → candidate features
             // Fine filter: draw_linestring's bbox check eliminates false positives
             if self.settings.show_coastlines {
                 let coastlines = self.get_coastlines(lod);
                 let grid = self.get_coastline_grid(lod);
-                let candidates = Self::query_grid_wrapped(grid, vp_min_lon, vp_min_lat, vp_max_lon, vp_max_lat);
+                let candidates = Self::query_grid_wrapped(grid, fg_min_lon, fg_min_lat, fg_max_lon, fg_max_lat);
                 for &idx in &candidates {
                     self.draw_linestring(&mut coastlines_canvas, &coastlines[idx], viewport);
                 }
@@ -616,20 +623,20 @@ impl MapRenderer {
             if self.settings.show_borders {
                 let borders = self.get_borders(lod);
                 let grid = self.get_border_grid(lod);
-                let candidates = Self::query_grid_wrapped(grid, vp_min_lon, vp_min_lat, vp_max_lon, vp_max_lat);
+                let candidates = Self::query_grid_wrapped(grid, fg_min_lon, fg_min_lat, fg_max_lon, fg_max_lat);
                 for &idx in &candidates {
                     self.draw_linestring(&mut borders_canvas, &borders[idx], viewport);
                 }
 
                 if self.settings.show_states && viewport.zoom >= 4.0 {
-                    let candidates = Self::query_grid_wrapped(&self.state_grid, vp_min_lon, vp_min_lat, vp_max_lon, vp_max_lat);
+                    let candidates = Self::query_grid_wrapped(&self.state_grid, fg_min_lon, fg_min_lat, fg_max_lon, fg_max_lat);
                     for &idx in &candidates {
                         self.draw_linestring(&mut states_canvas, &self.states[idx], viewport);
                     }
                 }
 
-                if self.settings.show_counties && viewport.zoom >= 6.0 {
-                    let candidates = Self::query_grid_wrapped(&self.county_grid, vp_min_lon, vp_min_lat, vp_max_lon, vp_max_lat);
+                if self.settings.show_counties && viewport.zoom >= 7.0 {
+                    let candidates = Self::query_grid_wrapped(&self.county_grid, fg_min_lon, fg_min_lat, fg_max_lon, fg_max_lat);
                     for &idx in &candidates {
                         self.draw_linestring(&mut counties_canvas, &self.counties[idx], viewport);
                     }
