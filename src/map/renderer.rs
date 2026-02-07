@@ -258,11 +258,14 @@ struct RenderCache {
     counties: BrailleCanvas,
 }
 
-/// Fast land/water lookup grid (0.1° resolution = 3600x1800 = 6.48M cells)
-/// Uses bitmap for memory efficiency (~810KB instead of 6.48MB)
-/// 0.1° ≈ 11km accuracy at equator - much better for coastlines
+/// Fast land/water lookup grid with two-tier conservative approximation.
+/// Coarse 1° tier (360×180) classifies cells as all-land/all-water/mixed.
+/// Fine 0.1° tier (3600×1800) bitmap provides exact checks for coastal cells.
+/// Deep ocean/inland checks skip the fine tier entirely.
 pub struct LandGrid {
     bitmap: Vec<u64>,
+    /// Coarse 1° tier: 0=all water, 1=mixed, 2=all land
+    coarse: Vec<u8>,
 }
 
 impl LandGrid {
@@ -275,6 +278,32 @@ impl LandGrid {
     pub fn new() -> Self {
         Self {
             bitmap: vec![0u64; Self::BITMAP_LEN],
+            coarse: vec![0u8; 360 * 180],
+        }
+    }
+
+    /// Build coarse 1° tier from fine 0.1° bitmap.
+    /// Each 1° cell covers 10×10 fine cells; classified as
+    /// all-water (0), mixed (1), or all-land (2).
+    fn build_coarse(&mut self) {
+        self.coarse = vec![0u8; 360 * 180];
+        for coarse_lat in 0..180usize {
+            for coarse_lon in 0..360usize {
+                let fine_lat_start = coarse_lat * 10;
+                let fine_lon_start = coarse_lon * 10;
+                let land_count = (0..10usize).flat_map(|fl| {
+                    (0..10usize).map(move |fc| (fl, fc))
+                }).filter(|&(fl, fc)| {
+                    let fine_idx = (fine_lat_start + fl) * Self::WIDTH + (fine_lon_start + fc);
+                    self.get_bit(fine_idx)
+                }).count();
+
+                self.coarse[coarse_lat * 360 + coarse_lon] = match land_count {
+                    0 => 0,     // all water
+                    100 => 2,   // all land
+                    _ => 1,     // mixed - needs fine check
+                };
+            }
         }
     }
 
@@ -323,22 +352,35 @@ impl LandGrid {
             }
         }
 
+        // Build coarse tier from fine bitmap
+        grid.build_coarse();
         grid
     }
 
-    /// Fast O(1) land check
+    /// Two-phase land check: coarse 1° tier short-circuits for deep
+    /// ocean/inland, fine 0.1° tier resolves coastal cells.
     #[inline(always)]
     pub fn is_land(&self, lon: f64, lat: f64) -> bool {
-        // Convert to grid coordinates (0.1° resolution)
-        let lon_idx = (((lon + 180.0).rem_euclid(360.0)) / Self::RESOLUTION) as usize;
-        let lat_idx = (((lat + 90.0).clamp(0.0, 179.999)) / Self::RESOLUTION) as usize;
+        // Phase 1: Coarse 1° check
+        let coarse_lon = ((lon + 180.0).rem_euclid(360.0)) as usize;
+        let coarse_lat = ((lat + 90.0).clamp(0.0, 179.999)) as usize;
+        let coarse_idx = coarse_lat * 360 + coarse_lon.min(359);
 
-        let idx = lat_idx.min(Self::HEIGHT - 1) * Self::WIDTH + lon_idx.min(Self::WIDTH - 1);
-        self.get_bit(idx)
+        match self.coarse[coarse_idx] {
+            0 => false, // all water - skip fine check
+            2 => true,  // all land - skip fine check
+            _ => {
+                // Phase 2: Fine 0.1° check (coastal cells only)
+                let lon_idx = (((lon + 180.0).rem_euclid(360.0)) / Self::RESOLUTION) as usize;
+                let lat_idx = (((lat + 90.0).clamp(0.0, 179.999)) / Self::RESOLUTION) as usize;
+                let idx = lat_idx.min(Self::HEIGHT - 1) * Self::WIDTH + lon_idx.min(Self::WIDTH - 1);
+                self.get_bit(idx)
+            }
+        }
     }
 }
 
-/// Map renderer with multi-resolution coastline data
+/// Map renderer with multi-resolution coastline data and spatial indexes
 pub struct MapRenderer {
     pub coastlines_low: Vec<LineString>,
     pub coastlines_medium: Vec<LineString>,
