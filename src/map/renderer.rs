@@ -628,7 +628,7 @@ impl MapRenderer {
                     }
                 }
 
-                if self.settings.show_counties && viewport.zoom >= 8.0 {
+                if self.settings.show_counties && viewport.zoom >= 6.0 {
                     let candidates = Self::query_grid_wrapped(&self.county_grid, vp_min_lon, vp_min_lat, vp_max_lon, vp_max_lat);
                     for &idx in &candidates {
                         self.draw_linestring(&mut counties_canvas, &self.counties[idx], viewport);
