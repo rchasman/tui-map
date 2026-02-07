@@ -129,57 +129,62 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
         }
     };
 
-    // Degrees per terminal character - determines LOD threshold
+    // Hierarchical fire rendering: pick grid resolution based on zoom
+    // deg_per_char >= 1.0 → coarse 1° grid (cell fits within 1 char)
+    // deg_per_char >= 0.25 → fine 0.25° grid (cell fits within 1 char)
+    // deg_per_char < 0.25 → individual fires for full detail
     let deg_per_char = 360.0 / (viewport.zoom * inner.width as f64);
-    let use_grid = deg_per_char > 0.5; // Use grid when each char covers > 0.5°
+    let half_width_deg = 180.0 / viewport.zoom;
+    let half_height_deg = 90.0 / viewport.zoom;
+    let vp_min_lon = viewport.center_lon - half_width_deg * 1.5;
+    let vp_max_lon = viewport.center_lon + half_width_deg * 1.5;
+    let vp_min_lat = (viewport.center_lat - half_height_deg * 1.5).max(-90.0);
+    let vp_max_lat = (viewport.center_lat + half_height_deg * 1.5).min(90.0);
 
-    if use_grid {
-        // O(1) grid-based rendering: iterate visible grid cells only
-        for (lon, lat, intensity) in app.fire_grid.iter_fires() {
+    if deg_per_char >= 0.25 {
+        // Grid-based rendering: query only viewport cells
+        let grid = if deg_per_char >= 1.0 { &app.fire_grid } else { &app.fire_grid_fine };
+        let mut fires_data = grid.fires_in_region(
+            vp_min_lon.max(-180.0), vp_min_lat, vp_max_lon.min(180.0), vp_max_lat,
+        );
+        // Handle date-line wrapping
+        if vp_min_lon < -180.0 {
+            fires_data.extend(grid.fires_in_region(vp_min_lon + 360.0, vp_min_lat, 180.0, vp_max_lat));
+        }
+        if vp_max_lon > 180.0 {
+            fires_data.extend(grid.fires_in_region(-180.0, vp_min_lat, vp_max_lon - 360.0, vp_max_lat));
+        }
+
+        for (lon, lat, intensity) in fires_data {
             for &offset in &[0.0, -360.0, 360.0] {
                 let ((px, py), _) = viewport.project_wrapped(lon, lat, offset);
-
                 if px >= 0 && py >= 0 && px < 30000 && py < 30000 {
-                    let cx = (px / 2) as usize;
-                    let cy = (py / 4) as usize;
-                    add_fire(cx, cy, intensity);
+                    add_fire((px / 2) as usize, (py / 4) as usize, intensity);
                     break;
                 }
             }
         }
     } else {
-        // High zoom: render individual fires for detail
-        let half_width_deg = 180.0 / viewport.zoom;
-        let half_height_deg = 90.0 / viewport.zoom;
-        let min_lon = viewport.center_lon - half_width_deg * 1.5;
-        let max_lon = viewport.center_lon + half_width_deg * 1.5;
-        let min_lat = (viewport.center_lat - half_height_deg * 1.5).max(-90.0);
-        let max_lat = (viewport.center_lat + half_height_deg * 1.5).min(90.0);
-
+        // High zoom: render individual fires for full detail
         for fire in &app.fires {
             if fire.intensity < 10 {
                 continue;
             }
-
-            // Fast viewport culling
-            let in_lat = fire.lat >= min_lat && fire.lat <= max_lat;
+            let in_lat = fire.lat >= vp_min_lat && fire.lat <= vp_max_lat;
             if !in_lat {
                 continue;
             }
-            let in_lon = (fire.lon >= min_lon && fire.lon <= max_lon) ||
-                         (fire.lon - 360.0 >= min_lon && fire.lon - 360.0 <= max_lon) ||
-                         (fire.lon + 360.0 >= min_lon && fire.lon + 360.0 <= max_lon);
+            let in_lon = (fire.lon >= vp_min_lon && fire.lon <= vp_max_lon) ||
+                         (fire.lon - 360.0 >= vp_min_lon && fire.lon - 360.0 <= vp_max_lon) ||
+                         (fire.lon + 360.0 >= vp_min_lon && fire.lon + 360.0 <= vp_max_lon);
             if !in_lon {
                 continue;
             }
 
             for &offset in &[0.0, -360.0, 360.0] {
                 let ((px, py), _) = viewport.project_wrapped(fire.lon, fire.lat, offset);
-
                 if px >= 0 && py >= 0 && px < 30000 && py < 30000 {
-                    let cx = (px / 2) as usize;
-                    let cy = (py / 4) as usize;
-                    add_fire(cx, cy, fire.intensity);
+                    add_fire((px / 2) as usize, (py / 4) as usize, fire.intensity);
                     break;
                 }
             }

@@ -26,51 +26,66 @@ pub struct Fallout {
     pub intensity: u16, // Decays slowly over many frames
 }
 
-/// Coarse fire grid for O(1) zoom-out rendering (1° cells = 360×180)
+/// Multi-resolution fire grid for viewport-aware rendering.
+/// Configurable cell resolution enables hierarchical spatial queries:
+/// coarse (1°) for zoomed-out, fine (0.25°) for medium zoom.
 pub struct FireGrid {
     /// Max intensity per cell (0 = no fire)
     cells: Vec<u8>,
+    width: usize,
+    height: usize,
+    resolution: f64,
 }
 
 impl FireGrid {
-    const WIDTH: usize = 360;
-    const HEIGHT: usize = 180;
-
-    pub fn new() -> Self {
+    pub fn new(resolution: f64) -> Self {
+        let width = (360.0 / resolution) as usize;
+        let height = (180.0 / resolution) as usize;
         Self {
-            cells: vec![0; Self::WIDTH * Self::HEIGHT],
+            cells: vec![0; width * height],
+            width,
+            height,
+            resolution,
         }
     }
 
     /// Rebuild grid from fires Vec - called after fire updates
     pub fn rebuild(&mut self, fires: &[Fire]) {
-        // Clear grid
         self.cells.fill(0);
-
-        // Populate with max intensity per cell
         for fire in fires {
-            let lon_idx = ((fire.lon + 180.0).rem_euclid(360.0)) as usize;
-            let lat_idx = ((fire.lat + 90.0).clamp(0.0, 179.999)) as usize;
-            let idx = lat_idx * Self::WIDTH + lon_idx;
+            let lon_idx = ((fire.lon + 180.0).rem_euclid(360.0) / self.resolution) as usize;
+            let lat_idx = ((fire.lat + 90.0).clamp(0.0, 180.0 - 0.001) / self.resolution) as usize;
+            let idx = lat_idx * self.width + lon_idx;
             if idx < self.cells.len() {
                 self.cells[idx] = self.cells[idx].max(fire.intensity);
             }
         }
     }
 
-    /// Iterate over cells with fire (for zoomed-out rendering)
-    pub fn iter_fires(&self) -> impl Iterator<Item = (f64, f64, u8)> + '_ {
-        self.cells.iter().enumerate().filter_map(|(idx, &intensity)| {
-            if intensity > 0 {
-                let lat_idx = idx / Self::WIDTH;
-                let lon_idx = idx % Self::WIDTH;
-                let lon = lon_idx as f64 - 180.0 + 0.5; // Cell center
-                let lat = lat_idx as f64 - 90.0 + 0.5;
-                Some((lon, lat, intensity))
-            } else {
-                None
+    /// Query fires within viewport bounds only (not all cells).
+    /// Returns (lon, lat, intensity) at cell centers.
+    pub fn fires_in_region(&self, min_lon: f64, min_lat: f64, max_lon: f64, max_lat: f64) -> Vec<(f64, f64, u8)> {
+        let min_x = ((min_lon + 180.0).max(0.0) / self.resolution) as usize;
+        let max_x = (((max_lon + 180.0).min(360.0)) / self.resolution).ceil() as usize;
+        let min_y = ((min_lat + 90.0).max(0.0) / self.resolution) as usize;
+        let max_y = (((max_lat + 90.0).min(180.0)) / self.resolution).ceil() as usize;
+
+        let max_x = max_x.min(self.width);
+        let max_y = max_y.min(self.height);
+
+        let mut results = Vec::new();
+        for lat_idx in min_y..max_y {
+            let row_start = lat_idx * self.width;
+            for lon_idx in min_x..max_x {
+                let intensity = self.cells[row_start + lon_idx];
+                if intensity > 0 {
+                    let lon = lon_idx as f64 * self.resolution - 180.0 + self.resolution / 2.0;
+                    let lat = lat_idx as f64 * self.resolution - 90.0 + self.resolution / 2.0;
+                    results.push((lon, lat, intensity));
+                }
             }
-        })
+        }
+        results
     }
 }
 
@@ -87,8 +102,10 @@ pub struct App {
     pub explosions: Vec<Explosion>,
     /// Active fires
     pub fires: Vec<Fire>,
-    /// Coarse fire grid for fast zoom-out rendering
+    /// Coarse 1° fire grid for zoomed-out rendering
     pub fire_grid: FireGrid,
+    /// Fine 0.25° fire grid for medium-zoom rendering
+    pub fire_grid_fine: FireGrid,
     /// Fallout zones
     pub fallout: Vec<Fallout>,
     /// Total casualties
@@ -116,7 +133,8 @@ impl App {
             mouse_pos: None,
             explosions: Vec::new(),
             fires: Vec::new(),
-            fire_grid: FireGrid::new(),
+            fire_grid: FireGrid::new(1.0),
+            fire_grid_fine: FireGrid::new(0.25),
             fallout: Vec::new(),
             casualties: 0,
             frame: 0,
@@ -468,8 +486,9 @@ impl App {
             }
         }
 
-        // Rebuild fire grid for O(1) zoom-out rendering
+        // Rebuild both fire grids: coarse for zoom-out, fine for medium zoom
         self.fire_grid.rebuild(&self.fires);
+        self.fire_grid_fine.rebuild(&self.fires);
 
         !self.explosions.is_empty() || !self.fires.is_empty() || !self.fallout.is_empty()
     }
