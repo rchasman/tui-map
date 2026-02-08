@@ -485,10 +485,15 @@ impl App {
         !self.explosions.is_empty() || !self.fires.is_empty() || !self.fallout.is_empty()
     }
 
-    /// Flipped join: for each city, probe the fire grid to check if it's burning.
-    /// O(cities) with O(1) array lookups vs the old O(fires) with HashMap queries.
+    /// Flipped join: for each city, probe fire grid neighborhood to check if burning.
+    /// O(cities × 9) with flat array lookups vs old O(fires) with HashMap queries.
+    /// Scales damage by number of burning cells to match old per-fire behavior.
     fn apply_fire_damage_to_cities(&mut self) {
-        let rate = 0.01; // 1% per 10 frames
+        let rate = 0.01;
+        let res = self.fire_grid_fine.resolution;
+        let width = self.fire_grid_fine.width;
+        let height = self.fire_grid_fine.height;
+
         for idx in 0..self.map_renderer.city_grid.len() {
             let (lon, lat, pop) = {
                 let city = match self.map_renderer.city_grid.get(idx) {
@@ -501,18 +506,24 @@ impl App {
                 (city.lon, city.lat, city.population)
             };
 
-            // Probe the fine fire grid at city location — O(1) flat array lookup
-            let lon_idx = ((lon + 180.0).rem_euclid(360.0) / 0.25) as usize;
-            let lat_idx = ((lat + 90.0).clamp(0.0, 179.999) / 0.25) as usize;
-            let grid_idx = lat_idx * self.fire_grid_fine.width + lon_idx;
-            let intensity = if grid_idx < self.fire_grid_fine.cells.len() {
-                self.fire_grid_fine.cells[grid_idx]
-            } else {
-                0
-            };
+            // Probe 3×3 neighborhood around city — 9 flat array lookups
+            let cx = ((lon + 180.0).rem_euclid(360.0) / res) as i32;
+            let cy = ((lat + 90.0).clamp(0.0, 180.0 - 0.001) / res) as i32;
 
-            if intensity > 50 {
-                let damage = ((pop as f64 * rate) as u64).max(1);
+            let mut fire_cells = 0u32;
+            for dy in -1i32..=1 {
+                for dx in -1i32..=1 {
+                    let nx = (cx + dx).clamp(0, width as i32 - 1) as usize;
+                    let ny = (cy + dy).clamp(0, height as i32 - 1) as usize;
+                    if self.fire_grid_fine.cells[ny * width + nx] > 50 {
+                        fire_cells += 1;
+                    }
+                }
+            }
+
+            if fire_cells > 0 {
+                // Scale damage by burning cells: matches old per-fire compounding
+                let damage = ((pop as f64 * rate * fire_cells as f64) as u64).max(1);
                 if let Some(city) = self.map_renderer.city_grid.get_mut(idx) {
                     city.population = city.population.saturating_sub(damage);
                     self.casualties += damage;
