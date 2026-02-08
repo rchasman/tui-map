@@ -581,12 +581,14 @@ impl MapRenderer {
         let vp_min_lat = (viewport.center_lat - (90.0 / viewport.zoom)).max(-85.0);
         let vp_max_lat = (viewport.center_lat + (90.0 / viewport.zoom)).min(85.0);
 
-        // Padded bounds for FeatureGrid queries: accounts for Mercator lat
-        // distortion and draw_linestring's 50px screen-space edge padding
-        let fg_min_lon = vp_min_lon - 5.0;
-        let fg_max_lon = vp_max_lon + 5.0;
-        let fg_min_lat = (vp_min_lat - 5.0).max(-90.0);
-        let fg_max_lat = (vp_max_lat + 5.0).min(90.0);
+        // Padded bounds for FeatureGrid queries: match draw_linestring's 50px
+        // screen-space padding converted to geographic degrees at current zoom
+        let deg_per_px = 360.0 / (viewport.zoom * width as f64 * 2.0);
+        let pad = (50.0 * deg_per_px).max(5.0);
+        let fg_min_lon = vp_min_lon - pad;
+        let fg_max_lon = vp_max_lon + pad;
+        let fg_min_lat = (vp_min_lat - pad).max(-90.0);
+        let fg_max_lat = (vp_max_lat + pad).min(90.0);
 
         // Check if we can use cached static layers
         let cache_key = RenderCacheKey::from_viewport(viewport, width, height, &self.settings);
