@@ -296,47 +296,6 @@ impl Widget for MapWidget {
         // 4. Country borders (Cyan - on top so always visible above states)
         self.render_layer(&self.layers.borders, Color::Cyan, area, buf);
 
-        // Then overlay city markers and labels
-        let marker_style = Style::default().fg(Color::White);
-        let label_style = Style::default().fg(Color::White);
-        let dead_marker_style = Style::default().fg(Color::DarkGray);
-        let dead_label_style = Style::default().fg(Color::DarkGray).add_modifier(Modifier::CROSSED_OUT);
-
-        for (lx, ly, text) in &self.layers.labels {
-            // Check bounds
-            if *ly >= self.inner_height || *lx >= self.inner_width {
-                continue;
-            }
-
-            let x = area.x + *lx;
-            let y = area.y + *ly;
-
-            // Check for dead city (~ prefix) or skull marker
-            let is_dead = text.starts_with('~') || text.starts_with('☠');
-            let display_text_raw = if text.starts_with('~') { &text[1..] } else { text.as_str() };
-
-            // Check if this is a marker glyph (single char) or a label
-            let is_marker = text.len() <= 3 && matches!(text.chars().next(), Some('⚜' | '★' | '◆' | '■' | '●' | '○' | '◦' | '·' | '☠'));
-            let style = match (is_marker, is_dead) {
-                (true, true) => dead_marker_style,
-                (true, false) => marker_style,
-                (false, true) => dead_label_style,
-                (false, false) => label_style,
-            };
-
-            // Truncate label to fit screen, allow longer labels for population
-            let max_len = (self.inner_width.saturating_sub(*lx)) as usize;
-            let max_display = if is_marker { 1 } else { 24 };
-            let display_text: String = display_text_raw.chars().take(max_len.min(max_display)).collect();
-
-            for (i, ch) in display_text.chars().enumerate() {
-                let px = x + i as u16;
-                if px < area.x + area.width {
-                    buf[(px, y)].set_char(ch).set_style(style);
-                }
-            }
-        }
-
         // Render fires - simple density-based blocks, color does the work
         for fire in &self.fires {
             let x = area.x + fire.x;
@@ -367,6 +326,51 @@ impl Widget for MapWidget {
                 };
 
                 buf[(x, y)].set_char(ch).set_fg(Color::Rgb(r, g, b));
+            }
+        }
+
+        // City markers and labels — rendered ON TOP of fires so population
+        // damage is visible through the flames
+        for (lx, ly, text, health) in &self.layers.labels {
+            if *ly >= self.inner_height || *lx >= self.inner_width {
+                continue;
+            }
+
+            let x = area.x + *lx;
+            let y = area.y + *ly;
+
+            let is_dead = text.starts_with('~') || text.starts_with('☠');
+            let display_text_raw = if text.starts_with('~') { &text[1..] } else { text.as_str() };
+
+            let is_marker = text.len() <= 3 && matches!(text.chars().next(), Some('⚜' | '★' | '◆' | '■' | '●' | '○' | '◦' | '·' | '☠'));
+
+            // Style dims with damage: White at full health → DarkGray at death
+            let style = if is_dead {
+                if is_marker {
+                    Style::default().fg(Color::DarkGray)
+                } else {
+                    Style::default().fg(Color::DarkGray).add_modifier(Modifier::CROSSED_OUT)
+                }
+            } else {
+                let brightness = (health * 200.0 + 55.0) as u8; // 55..255
+                Style::default().fg(Color::Rgb(brightness, brightness, brightness))
+            };
+
+            // Label truncates as population diminishes (markers always 1 char)
+            let max_len = (self.inner_width.saturating_sub(*lx)) as usize;
+            let max_display = if is_marker {
+                1
+            } else {
+                // 8 chars at near-death, 24 at full health
+                (8.0 + 16.0 * health) as usize
+            };
+            let display_text: String = display_text_raw.chars().take(max_len.min(max_display)).collect();
+
+            for (i, ch) in display_text.chars().enumerate() {
+                let px = x + i as u16;
+                if px < area.x + area.width {
+                    buf[(px, y)].set_char(ch).set_style(style);
+                }
             }
         }
 

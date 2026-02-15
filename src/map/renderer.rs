@@ -11,7 +11,7 @@ pub struct MapLayers {
     pub borders: BrailleCanvas,
     pub states: BrailleCanvas,
     pub counties: BrailleCanvas,
-    pub labels: Vec<(u16, u16, String)>,
+    pub labels: Vec<(u16, u16, String, f32)>,
 }
 
 /// Format population as compact string (e.g., 1.2M, 500K)
@@ -163,6 +163,7 @@ pub struct City {
     pub lat: f64,
     pub name: String,
     pub population: u64,
+    pub original_population: u64,
     pub is_capital: bool,
     pub is_megacity: bool,
     pub radius_km: f64, // Physical city radius based on population
@@ -712,19 +713,23 @@ impl MapRenderer {
             let max_pop = visible_cities.first().map(|(c, _, _)| c.population).unwrap_or(1);
 
             for (city, char_x, char_y) in visible_cities.into_iter().take(max_cities) {
+                let health = if city.original_population > 0 {
+                    city.population as f32 / city.original_population as f32
+                } else {
+                    1.0
+                };
+
                 // Dead city - skull marker
                 if city.population == 0 {
-                    labels.push((char_x, char_y, "☠".to_string()));
+                    labels.push((char_x, char_y, "☠".to_string(), 0.0));
                     if self.settings.show_labels {
                         if let Some(label_x) = char_x.checked_add(2) {
-                            // Prefix with ~ to indicate dead city for strikethrough
-                            labels.push((label_x, char_y, format!("~{}", city.name)));
+                            labels.push((label_x, char_y, format!("~{}", city.name), 0.0));
                         }
                     }
                     continue;
                 }
 
-                // Choose glyph based on city type and relative population
                 // Choose glyph based on city type and relative population
                 let ratio = city.population as f64 / max_pop.max(1) as f64;
                 let glyph = if city.is_capital {
@@ -746,7 +751,7 @@ impl MapRenderer {
                 };
 
                 // Add city marker
-                labels.push((char_x, char_y, glyph.to_string()));
+                labels.push((char_x, char_y, glyph.to_string(), health));
 
                 // Add label after marker
                 if self.settings.show_labels {
@@ -756,7 +761,7 @@ impl MapRenderer {
                         } else {
                             city.name.clone()
                         };
-                        labels.push((label_x, char_y, label));
+                        labels.push((label_x, char_y, label, health));
                     }
                 }
             }
@@ -860,6 +865,7 @@ impl MapRenderer {
             lat,
             name: name.to_string(),
             population,
+            original_population: population,
             is_capital,
             is_megacity,
             radius_km,
