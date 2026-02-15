@@ -1,5 +1,9 @@
 use std::f64::consts::PI;
 
+/// Longitude offsets for handling date-line wrapping.
+/// Try the original position first, then ±360°.
+pub const WRAP_OFFSETS: [f64; 3] = [0.0, -360.0, 360.0];
+
 /// Viewport representing the visible map area and zoom level
 #[derive(Clone)]
 pub struct Viewport {
@@ -147,6 +151,15 @@ impl Viewport {
         let py = ((y - center_y) * scale + self.height as f64 / 2.0) as i32;
 
         ((px, py), wrapped_lon)
+    }
+
+    /// Project trying all wrap offsets, return first with non-negative coords within safe range.
+    /// Most common pattern for fire/point rendering that needs the first valid screen position.
+    pub fn project_wrapped_first(&self, lon: f64, lat: f64) -> Option<(i32, i32)> {
+        WRAP_OFFSETS.iter().find_map(|&offset| {
+            let ((px, py), _) = self.project_wrapped(lon, lat, offset);
+            (px >= 0 && py >= 0 && px < 30000 && py < 30000).then_some((px, py))
+        })
     }
 
     /// Check if a projected point is visible in the viewport

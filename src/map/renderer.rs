@@ -1,6 +1,7 @@
 use crate::braille::BrailleCanvas;
 use crate::map::geometry::draw_line;
-use crate::map::projection::Viewport;
+use crate::geo::{normalize_lat, normalize_lon};
+use crate::map::projection::{Viewport, WRAP_OFFSETS};
 use crate::map::spatial::{FeatureGrid, SpatialGrid};
 use std::cell::RefCell;
 
@@ -362,8 +363,8 @@ impl LandGrid {
     #[inline(always)]
     pub fn is_land(&self, lon: f64, lat: f64) -> bool {
         // Phase 1: Coarse 1° check
-        let coarse_lon = ((lon + 180.0).rem_euclid(360.0)) as usize;
-        let coarse_lat = ((lat + 90.0).clamp(0.0, 179.999)) as usize;
+        let coarse_lon = normalize_lon(lon) as usize;
+        let coarse_lat = normalize_lat(lat) as usize;
         let coarse_idx = coarse_lat * 360 + coarse_lon.min(359);
 
         match self.coarse[coarse_idx] {
@@ -371,8 +372,8 @@ impl LandGrid {
             2 => true,  // all land - skip fine check
             _ => {
                 // Phase 2: Fine 0.1° check (coastal cells only)
-                let lon_idx = (((lon + 180.0).rem_euclid(360.0)) / Self::RESOLUTION) as usize;
-                let lat_idx = (((lat + 90.0).clamp(0.0, 179.999)) / Self::RESOLUTION) as usize;
+                let lon_idx = (normalize_lon(lon) / Self::RESOLUTION) as usize;
+                let lat_idx = (normalize_lat(lat) / Self::RESOLUTION) as usize;
                 let idx = lat_idx.min(Self::HEIGHT - 1) * Self::WIDTH + lon_idx.min(Self::WIDTH - 1);
                 self.get_bit(idx)
             }
@@ -686,7 +687,7 @@ impl MapRenderer {
                 .filter_map(|&idx| self.city_grid.get(idx))
                 .flat_map(|city| {
                     // Try normal position and wrapped positions
-                    [0.0, -360.0, 360.0].iter().filter_map(move |&offset| {
+                    WRAP_OFFSETS.iter().filter_map(move |&offset| {
                         let ((px, py), _) = viewport.project_wrapped(city.lon, city.lat, offset);
 
                         // Early rejection: negative coords or out of bounds
@@ -776,9 +777,7 @@ impl MapRenderer {
 
         // Draw the linestring at its normal position and potentially wrapped
         // This handles the case where the viewport crosses the date line
-        let offsets = [0.0, -360.0, 360.0];
-
-        for &lon_offset in &offsets {
+        for &lon_offset in &WRAP_OFFSETS {
             self.draw_linestring_with_offset(canvas, line, viewport, lon_offset);
         }
     }

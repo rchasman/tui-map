@@ -1,3 +1,5 @@
+use crate::geo::{normalize_lat, normalize_lon};
+use crate::hash::{hash3, rand_simple};
 use crate::map::{Lod, MapRenderer, Viewport};
 
 /// A nuclear explosion with position and animation frame
@@ -53,8 +55,8 @@ impl FireGrid {
     pub fn rebuild(&mut self, fires: &[Fire]) {
         self.cells.fill(0);
         for fire in fires {
-            let lon_idx = ((fire.lon + 180.0).rem_euclid(360.0) / self.resolution) as usize;
-            let lat_idx = ((fire.lat + 90.0).clamp(0.0, 180.0 - 0.001) / self.resolution) as usize;
+            let lon_idx = (normalize_lon(fire.lon) / self.resolution) as usize;
+            let lat_idx = (normalize_lat(fire.lat) / self.resolution) as usize;
             let idx = lat_idx * self.width + lon_idx;
             if idx < self.cells.len() {
                 self.cells[idx] = self.cells[idx].max(fire.intensity);
@@ -507,8 +509,8 @@ impl App {
             };
 
             // Probe 3×3 neighborhood around city — 9 flat array lookups
-            let cx = ((lon + 180.0).rem_euclid(360.0) / res) as i32;
-            let cy = ((lat + 90.0).clamp(0.0, 180.0 - 0.001) / res) as i32;
+            let cx = (normalize_lon(lon) / res) as i32;
+            let cy = (normalize_lat(lat) / res) as i32;
 
             let mut fire_cells = 0u32;
             for dy in -1i32..=1 {
@@ -580,41 +582,3 @@ fn fast_distance_km(lon1: f64, lat1: f64, lon2: f64, lat2: f64) -> f64 {
     R * (dx * dx + dy * dy).sqrt()
 }
 
-/// Haversine distance in kilometers (unused - kept for reference)
-#[allow(dead_code)]
-fn haversine_km(lon1: f64, lat1: f64, lon2: f64, lat2: f64) -> f64 {
-    let r = 6371.0; // Earth radius in km
-    let dlat = (lat2 - lat1).to_radians();
-    let dlon = (lon2 - lon1).to_radians();
-    let lat1 = lat1.to_radians();
-    let lat2 = lat2.to_radians();
-
-    let a = (dlat / 2.0).sin().powi(2) + lat1.cos() * lat2.cos() * (dlon / 2.0).sin().powi(2);
-    let c = 2.0 * a.sqrt().asin();
-    r * c
-}
-
-/// Fast 3-value hash with xorshift
-#[inline(always)]
-fn hash3(a: u64, b: u64, c: u64) -> u64 {
-    let mut seed = a.wrapping_mul(2654435761)
-                    .wrapping_add(b.wrapping_mul(2246822519))
-                    .wrapping_add(c);
-    seed ^= seed << 13;
-    seed ^= seed >> 7;
-    seed ^= seed << 17;
-    seed
-}
-
-/// Fast deterministic random using splitmix64 - handles small seeds properly
-#[inline(always)]
-fn rand_simple(seed: u64) -> f64 {
-    // Splitmix64: multiply by golden ratio to spread small seeds across full range
-    let mut x = seed.wrapping_mul(0x9e3779b97f4a7c15);
-    x ^= x >> 30;
-    x = x.wrapping_mul(0xbf58476d1ce4e5b9);
-    x ^= x >> 27;
-    x = x.wrapping_mul(0x94d049bb133111eb);
-    x ^= x >> 31;
-    (x >> 11) as f64 / 9007199254740992.0 // 2^53 for full f64 mantissa precision
-}

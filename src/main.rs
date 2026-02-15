@@ -1,6 +1,8 @@
 mod app;
 mod braille;
 mod data;
+mod geo;
+mod hash;
 mod map;
 mod ui;
 

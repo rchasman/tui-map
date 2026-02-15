@@ -1,5 +1,6 @@
 use crate::app::App;
-use crate::map::MapLayers;
+use crate::hash::{hash2, hash3};
+use crate::map::{MapLayers, WRAP_OFFSETS};
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Direction, Layout, Rect},
@@ -68,7 +69,7 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
     let mut explosions: Vec<ExplosionRender> = Vec::with_capacity(50);
     for exp in &app.explosions {
         // Try normal position and wrapped positions
-        for &offset in &[0.0, -360.0, 360.0] {
+        for &offset in &WRAP_OFFSETS {
             let ((px, py), _) = viewport.project_wrapped(exp.lon, exp.lat, offset);
 
             // Bounds check with safety margin to prevent u16 overflow panics
@@ -156,12 +157,8 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
         }
 
         for (lon, lat, intensity) in fires_data {
-            for &offset in &[0.0, -360.0, 360.0] {
-                let ((px, py), _) = viewport.project_wrapped(lon, lat, offset);
-                if px >= 0 && py >= 0 && px < 30000 && py < 30000 {
-                    add_fire((px / 2) as usize, (py / 4) as usize, intensity);
-                    break;
-                }
+            if let Some((px, py)) = viewport.project_wrapped_first(lon, lat) {
+                add_fire((px / 2) as usize, (py / 4) as usize, intensity);
             }
         }
     } else {
@@ -181,12 +178,8 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
                 continue;
             }
 
-            for &offset in &[0.0, -360.0, 360.0] {
-                let ((px, py), _) = viewport.project_wrapped(fire.lon, fire.lat, offset);
-                if px >= 0 && py >= 0 && px < 30000 && py < 30000 {
-                    add_fire((px / 2) as usize, (py / 4) as usize, fire.intensity);
-                    break;
-                }
+            if let Some((px, py)) = viewport.project_wrapped_first(fire.lon, fire.lat) {
+                add_fire((px / 2) as usize, (py / 4) as usize, fire.intensity);
             }
         }
     }
@@ -245,28 +238,6 @@ struct FireRender {
     x: u16,
     y: u16,
     intensity: u8,
-}
-
-/// Fast 2-value hash with xorshift (inline for performance)
-#[inline(always)]
-fn hash2(a: u64, b: u64) -> u64 {
-    let mut seed = a.wrapping_mul(2654435761).wrapping_add(b.wrapping_mul(2246822519));
-    seed ^= seed << 13;
-    seed ^= seed >> 7;
-    seed ^= seed << 17;
-    seed
-}
-
-/// Fast 3-value hash with xorshift (inline for performance)
-#[inline(always)]
-fn hash3(a: u64, b: u64, c: u64) -> u64 {
-    let mut seed = a.wrapping_mul(2654435761)
-                    .wrapping_add(b.wrapping_mul(2246822519))
-                    .wrapping_add(c);
-    seed ^= seed << 13;
-    seed ^= seed >> 7;
-    seed ^= seed << 17;
-    seed
 }
 
 /// Custom widget that renders braille map with text labels overlaid
