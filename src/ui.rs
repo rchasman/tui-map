@@ -136,11 +136,16 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
     // deg_per_char < 0.25 → individual fires for full detail
     let deg_per_char = 360.0 / (viewport.zoom * inner.width as f64);
     let half_width_deg = 180.0 / viewport.zoom;
-    let half_height_deg = 90.0 / viewport.zoom;
     let vp_min_lon = viewport.center_lon - half_width_deg * 1.5;
     let vp_max_lon = viewport.center_lon + half_width_deg * 1.5;
-    let vp_min_lat = (viewport.center_lat - half_height_deg * 1.5).max(-90.0);
-    let vp_max_lat = (viewport.center_lat + half_height_deg * 1.5).min(90.0);
+    // Use exact Mercator unproject for latitude bounds — the linear
+    // approximation breaks down because Mercator stretches latitude
+    // non-linearly and the viewport aspect ratio skews coverage.
+    let (_, top_lat) = viewport.unproject(0, 0);
+    let (_, bottom_lat) = viewport.unproject(0, viewport.height as i32);
+    let lat_pad = (top_lat - bottom_lat).abs() * 0.25;
+    let vp_min_lat = (bottom_lat - lat_pad).max(-90.0);
+    let vp_max_lat = (top_lat + lat_pad).min(90.0);
 
     if deg_per_char >= 0.25 {
         // Grid-based rendering: query only viewport cells

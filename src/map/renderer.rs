@@ -576,11 +576,13 @@ impl MapRenderer {
         let lod = Lod::from_zoom(viewport.zoom);
         let mut labels = Vec::new();
 
-        // Viewport geographic bounds (for city filtering)
+        // Viewport geographic bounds (exact Mercator unproject, not linear approx)
         let vp_min_lon = viewport.center_lon - (180.0 / viewport.zoom);
         let vp_max_lon = viewport.center_lon + (180.0 / viewport.zoom);
-        let vp_min_lat = (viewport.center_lat - (90.0 / viewport.zoom)).max(-85.0);
-        let vp_max_lat = (viewport.center_lat + (90.0 / viewport.zoom)).min(85.0);
+        let (_, top_lat) = viewport.unproject(0, 0);
+        let (_, bottom_lat) = viewport.unproject(0, viewport.height as i32);
+        let vp_min_lat = bottom_lat.max(-85.0);
+        let vp_max_lat = top_lat.min(85.0);
 
         // Padded bounds for FeatureGrid queries: match draw_linestring's 50px
         // screen-space padding converted to geographic degrees at current zoom
