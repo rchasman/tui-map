@@ -1,5 +1,4 @@
 pub use glam::DVec3;
-use std::f64::consts::PI;
 
 use crate::map::projection::Viewport;
 
@@ -35,18 +34,21 @@ impl GlobeViewport {
             lat_rad.sin(),
         );
 
-        // Up = derivative of forward w.r.t. latitude (points north on sphere)
-        let raw_up = DVec3::new(
-            -lat_rad.sin() * lon_rad.cos(),
-            -lat_rad.sin() * lon_rad.sin(),
-            lat_rad.cos(),
-        );
+        let mut globe = Self { forward, right: DVec3::X, up: DVec3::Z, radius, width, height };
+        globe.recompute_frame();
+        globe
+    }
 
-        // Right = forward × up (points east)
-        let right = forward.cross(raw_up).normalize();
-        let up = right.cross(forward).normalize();
-
-        Self { forward, right, up, radius, width, height }
+    /// Derive right (east) and up (north) from forward using world Z-axis.
+    /// No trig, no lon/lat roundtrip — just two cross products.
+    fn recompute_frame(&mut self) {
+        let world_z = DVec3::Z;
+        let right = world_z.cross(self.forward);
+        if right.length_squared() < 1e-10 {
+            return; // at a pole — current frame is valid
+        }
+        self.right = right.normalize();
+        self.up = self.forward.cross(self.right).normalize();
     }
 
     /// Convert current Mercator viewport to globe, preserving center and proportional zoom.
@@ -132,41 +134,33 @@ impl GlobeViewport {
         let angle_x = (dx as f64) / self.radius;
         let angle_y = -(dy as f64) / self.radius;
 
-        // Rotate around up axis (horizontal drag → longitude change)
+        // Rotate forward around up axis (horizontal drag → longitude)
         if angle_x.abs() > 1e-10 {
             let (sin_a, cos_a) = angle_x.sin_cos();
-            let new_forward = self.forward * cos_a + self.right * sin_a;
-            let new_right = self.right * cos_a - self.forward * sin_a;
-            self.forward = new_forward.normalize();
-            self.right = new_right.normalize();
+            self.forward = (self.forward * cos_a + self.right * sin_a).normalize();
         }
 
-        // Rotate around right axis (vertical drag → latitude change)
+        // Rotate forward around right axis (vertical drag → latitude)
         if angle_y.abs() > 1e-10 {
             let (sin_a, cos_a) = angle_y.sin_cos();
-            let new_forward = self.forward * cos_a + self.up * sin_a;
-            let new_up = self.up * cos_a - self.forward * sin_a;
-            self.forward = new_forward.normalize();
-            self.up = new_up.normalize();
+            self.forward = (self.forward * cos_a + self.up * sin_a).normalize();
         }
+
+        self.recompute_frame();
     }
 
     /// Apply angular momentum (radians) — used for inertial spin after drag release.
     pub fn apply_momentum(&mut self, vel_x: f64, vel_y: f64) {
         if vel_x.abs() > 1e-10 {
             let (sin_a, cos_a) = vel_x.sin_cos();
-            let new_forward = self.forward * cos_a + self.right * sin_a;
-            let new_right = self.right * cos_a - self.forward * sin_a;
-            self.forward = new_forward.normalize();
-            self.right = new_right.normalize();
+            self.forward = (self.forward * cos_a + self.right * sin_a).normalize();
         }
         if vel_y.abs() > 1e-10 {
             let (sin_a, cos_a) = vel_y.sin_cos();
-            let new_forward = self.forward * cos_a + self.up * sin_a;
-            let new_up = self.up * cos_a - self.forward * sin_a;
-            self.forward = new_forward.normalize();
-            self.up = new_up.normalize();
+            self.forward = (self.forward * cos_a + self.up * sin_a).normalize();
         }
+
+        self.recompute_frame();
     }
 
     /// Zoom in by scaling the sphere radius.
@@ -218,66 +212,61 @@ impl GlobeViewport {
 
             if angle_x.abs() > 1e-10 {
                 let (sin_a, cos_a) = angle_x.sin_cos();
-                let new_forward = self.forward * cos_a + self.right * sin_a;
-                let new_right = self.right * cos_a - self.forward * sin_a;
-                self.forward = new_forward.normalize();
-                self.right = new_right.normalize();
+                self.forward = (self.forward * cos_a + self.right * sin_a).normalize();
             }
             if angle_y.abs() > 1e-10 {
                 let (sin_a, cos_a) = angle_y.sin_cos();
-                let new_forward = self.forward * cos_a + self.up * sin_a;
-                let new_up = self.up * cos_a - self.forward * sin_a;
-                self.forward = new_forward.normalize();
-                self.up = new_up.normalize();
+                self.forward = (self.forward * cos_a + self.up * sin_a).normalize();
             }
+
+            self.recompute_frame();
         }
     }
 
     /// Conservative lat/lon bounding box of the visible hemisphere.
     /// Used for spatial index queries. Samples points around the visible disk edge.
     pub fn visible_bounds(&self) -> (f64, f64, f64, f64) {
+        // Latitude: analytical from edge z-range.
+        // Edge of visible disk: p = right*cos(θ) + up*sin(θ), so
+        // p.z = right.z*cos(θ) + up.z*sin(θ), range = ±sqrt(right.z² + up.z²)
+        let edge_z = (self.right.z * self.right.z + self.up.z * self.up.z).sqrt();
+        let min_lat = (-edge_z).max(-1.0).asin().to_degrees();
+        let max_lat = edge_z.min(1.0).asin().to_degrees();
+
+        // Longitude: sample 8 cardinal/ordinal directions on the disk edge.
+        // No sin/cos calls — just ±right, ±up, ±(right±up)/√2.
+        const INV_SQRT2: f64 = std::f64::consts::FRAC_1_SQRT_2;
+        let samples: [DVec3; 9] = [
+            self.forward,                                          // center
+            self.right,                                            // 0°
+            self.right * INV_SQRT2 + self.up * INV_SQRT2,         // 45°
+            self.up,                                               // 90°
+            self.right * (-INV_SQRT2) + self.up * INV_SQRT2,      // 135°
+            -self.right,                                           // 180°
+            self.right * (-INV_SQRT2) + self.up * (-INV_SQRT2),   // 225°
+            -self.up,                                              // 270°
+            self.right * INV_SQRT2 + self.up * (-INV_SQRT2),      // 315°
+        ];
+
         let mut min_lon = f64::MAX;
         let mut max_lon = f64::MIN;
-        let mut min_lat = f64::MAX;
-        let mut max_lat = f64::MIN;
-
-        // Sample the center
-        let (clon, clat) = self.center_lonlat();
-        min_lon = min_lon.min(clon);
-        max_lon = max_lon.max(clon);
-        min_lat = min_lat.min(clat);
-        max_lat = max_lat.max(clat);
-
-        // Sample 32 points around the visible disk edge
-        for i in 0..32 {
-            let angle = (i as f64 / 32.0) * 2.0 * PI;
-            let sx = angle.cos();
-            let sy = angle.sin();
-
-            let p = self.right * sx + self.up * sy;
-            let lat = p.z.clamp(-1.0, 1.0).asin().to_degrees();
+        for p in &samples {
             let lon = p.y.atan2(p.x).to_degrees();
-
             min_lon = min_lon.min(lon);
             max_lon = max_lon.max(lon);
-            min_lat = min_lat.min(lat);
-            max_lat = max_lat.max(lat);
         }
 
-        // If the visible hemisphere spans > 180° longitude, it likely wraps
-        // around — return full range to avoid missing features
+        // If the visible hemisphere spans > 180° longitude, it wraps
         if max_lon - min_lon > 180.0 {
             min_lon = -180.0;
             max_lon = 180.0;
         }
 
-        // Check if either pole is visible (forward.z close to ±1 means pole in view)
-        if self.forward.z > 0.0 && clat + 90.0 > (90.0 - 1.0) {
-            max_lat = 90.0;
-        }
-        if self.forward.z < 0.0 && clat - 90.0 < (-90.0 + 1.0) {
-            min_lat = -90.0;
-        }
+        // Pole visibility: if forward.z magnitude > cos(edge angular radius),
+        // the pole is within the visible hemisphere
+        let center_lat = self.forward.z.clamp(-1.0, 1.0).asin().to_degrees();
+        let min_lat = if self.forward.z < 0.0 && center_lat - 90.0 < -89.0 { -90.0 } else { min_lat };
+        let max_lat = if self.forward.z > 0.0 && center_lat + 90.0 > 89.0 { 90.0 } else { max_lat };
 
         (min_lon.max(-180.0), min_lat.max(-90.0), max_lon.min(180.0), max_lat.min(90.0))
     }
