@@ -116,8 +116,8 @@ pub struct App {
     pub frame: u64,
     /// Last frame when a nuke was launched (for cooldown)
     last_nuke_frame: u64,
-    /// Globe spin momentum (angular velocity in radians/frame)
-    spin_velocity: (f64, f64),
+    /// Globe horizontal spin momentum (radians/frame, vertical axis only)
+    spin_velocity: f64,
 }
 
 impl App {
@@ -143,7 +143,7 @@ impl App {
             casualties: 0,
             frame: 0,
             last_nuke_frame: 0,
-            spin_velocity: (0.0, 0.0),
+            spin_velocity: 0.0,
         }
     }
 
@@ -224,13 +224,9 @@ impl App {
             let scale = if zoom < 2.0 { 2 } else if zoom < 4.0 { 3 } else { 4 };
             self.pan(dx * scale, dy * scale);
 
-            // Track angular velocity for globe momentum
             if let Projection::Globe(ref g) = self.projection {
                 let ax = (dx * scale) as f64 / g.radius;
-                let ay = -(dy * scale) as f64 / g.radius;
-                // EMA smoothing to filter jitter from individual mouse events
-                self.spin_velocity.0 = self.spin_velocity.0 * 0.5 + ax * 0.5;
-                self.spin_velocity.1 = self.spin_velocity.1 * 0.5 + ay * 0.5;
+                self.spin_velocity = self.spin_velocity * 0.5 + ax * 0.5;
             }
         }
         self.last_mouse = Some((x, y));
@@ -243,7 +239,7 @@ impl App {
 
     /// Cancel spin momentum (called on new drag start)
     pub fn start_drag(&mut self, x: u16, y: u16) {
-        self.spin_velocity = (0.0, 0.0);
+        self.spin_velocity = 0.0;
         self.last_mouse = Some((x, y));
     }
 
@@ -408,14 +404,11 @@ impl App {
 
         // Apply globe spin momentum (only when not dragging)
         if self.last_mouse.is_none() {
-            let (vx, vy) = self.spin_velocity;
-            if vx.abs() > 0.0001 || vy.abs() > 0.0001 {
+            if self.spin_velocity.abs() > 0.0001 {
                 if let Projection::Globe(ref mut g) = self.projection {
-                    g.apply_momentum(vx, vy);
+                    g.apply_momentum(self.spin_velocity, 0.0);
                 }
-                // Exponential decay — ~3 seconds to stop at 60fps (0.95^180 ≈ 0.0001)
-                self.spin_velocity.0 *= 0.95;
-                self.spin_velocity.1 *= 0.95;
+                self.spin_velocity *= 0.95;
             }
         }
 
