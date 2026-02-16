@@ -1,6 +1,6 @@
 use crate::geo::{normalize_lat, normalize_lon};
 use crate::hash::{hash3, rand_simple};
-use crate::map::{Lod, MapRenderer, Viewport};
+use crate::map::{Lod, MapRenderer, Projection, Viewport};
 
 /// A nuclear explosion with position and animation frame
 #[derive(Clone)]
@@ -93,7 +93,7 @@ impl FireGrid {
 
 /// Application state
 pub struct App {
-    pub viewport: Viewport,
+    pub projection: Projection,
     pub map_renderer: MapRenderer,
     pub should_quit: bool,
     /// Last mouse position for drag tracking
@@ -128,7 +128,7 @@ impl App {
         let pixel_height = inner_height * 4;
 
         Self {
-            viewport: Viewport::world(pixel_width, pixel_height),
+            projection: Projection::Mercator(Viewport::world(pixel_width, pixel_height)),
             map_renderer: MapRenderer::new(),
             should_quit: false,
             last_mouse: None,
@@ -146,43 +146,38 @@ impl App {
 
     /// Update viewport size when terminal resizes
     pub fn resize(&mut self, width: usize, height: usize) {
-        // Account for border (2 chars horizontal, 2 chars vertical including status bar)
         let inner_width = width.saturating_sub(2);
         let inner_height = height.saturating_sub(3);
-        self.viewport.width = inner_width * 2;
-        self.viewport.height = inner_height * 4;
+        self.projection.set_size(inner_width * 2, inner_height * 4);
     }
 
     /// Pan the map
     pub fn pan(&mut self, dx: i32, dy: i32) {
-        self.viewport.pan(dx, dy);
+        self.projection.pan(dx, dy);
     }
 
     /// Zoom in
     pub fn zoom_in(&mut self) {
-        self.viewport.zoom_in();
+        self.projection.zoom_in();
     }
 
     /// Zoom out
     pub fn zoom_out(&mut self) {
-        self.viewport.zoom_out();
+        self.projection.zoom_out();
     }
 
     /// Zoom in towards a screen position (terminal column/row)
     pub fn zoom_in_at(&mut self, col: u16, row: u16) {
-        // Convert terminal coords to braille pixel coords
-        // Each terminal cell is 2 braille pixels wide, 4 tall
-        // Account for border (1 cell offset)
         let px = ((col.saturating_sub(1)) as i32) * 2;
         let py = ((row.saturating_sub(1)) as i32) * 4;
-        self.viewport.zoom_in_at(px, py);
+        self.projection.zoom_in_at(px, py);
     }
 
     /// Zoom out from a screen position (terminal column/row)
     pub fn zoom_out_at(&mut self, col: u16, row: u16) {
         let px = ((col.saturating_sub(1)) as i32) * 2;
         let py = ((row.saturating_sub(1)) as i32) * 4;
-        self.viewport.zoom_out_at(px, py);
+        self.projection.zoom_out_at(px, py);
     }
 
     /// Request quit
@@ -192,42 +187,38 @@ impl App {
 
     /// Get current zoom level as a string
     pub fn zoom_level(&self) -> String {
-        format!("{:.1}x", self.viewport.zoom)
+        format!("{:.1}x", self.projection.effective_zoom())
     }
 
     /// Get current center coordinates as a string
     pub fn center_coords(&self) -> String {
+        let lat = self.projection.center_lat();
+        let lon = self.projection.center_lon();
         format!(
             "{:.1}°{}, {:.1}°{}",
-            self.viewport.center_lat.abs(),
-            if self.viewport.center_lat >= 0.0 { "N" } else { "S" },
-            self.viewport.center_lon.abs(),
-            if self.viewport.center_lon >= 0.0 { "E" } else { "W" }
+            lat.abs(),
+            if lat >= 0.0 { "N" } else { "S" },
+            lon.abs(),
+            if lon >= 0.0 { "E" } else { "W" }
         )
     }
 
     /// Get current LOD level as a string
     pub fn lod_level(&self) -> &'static str {
-        match Lod::from_zoom(self.viewport.zoom) {
+        match Lod::from_zoom(self.projection.effective_zoom()) {
             Lod::Low => "110m",
             Lod::Medium => "50m",
             Lod::High => "10m",
         }
     }
 
-    /// Handle mouse drag - returns true if we should pan
+    /// Handle mouse drag
     pub fn handle_drag(&mut self, x: u16, y: u16) {
         if let Some((last_x, last_y)) = self.last_mouse {
             let dx = last_x as i32 - x as i32;
             let dy = last_y as i32 - y as i32;
-            // Scale based on zoom: less sensitive when zoomed out
-            let scale = if self.viewport.zoom < 2.0 {
-                2
-            } else if self.viewport.zoom < 4.0 {
-                3
-            } else {
-                4
-            };
+            let zoom = self.projection.effective_zoom();
+            let scale = if zoom < 2.0 { 2 } else if zoom < 4.0 { 3 } else { 4 };
             self.pan(dx * scale, dy * scale);
         }
         self.last_mouse = Some((x, y));
@@ -256,24 +247,24 @@ impl App {
 
     /// Launch a nuke at the given screen position
     pub fn launch_nuke(&mut self, col: u16, row: u16) {
-        // Cooldown: 15 frames between nukes (~250ms at 60fps)
         const NUKE_COOLDOWN_FRAMES: u64 = 15;
 
         if self.frame < self.last_nuke_frame + NUKE_COOLDOWN_FRAMES {
-            return; // Still on cooldown
+            return;
         }
-
-        self.last_nuke_frame = self.frame;
 
         let px = ((col.saturating_sub(1)) as i32) * 2;
         let py = ((row.saturating_sub(1)) as i32) * 4;
-        let (lon, lat) = self.viewport.unproject(px, py);
 
-        // Blast radius scales with zoom - bigger nukes when zoomed out
-        // Zoomed out (1x) = ~750km radius (regional devastation)
-        // Medium (5x) = ~190km radius (city-destroying)
-        // Zoomed in (20x+) = ~87km (tactical)
-        let radius_km = 50.0 + 700.0 / self.viewport.zoom;
+        // On globe, clicking outside the sphere does nothing
+        let (lon, lat) = match self.projection.unproject(px, py) {
+            Some(coords) => coords,
+            None => return,
+        };
+
+        self.last_nuke_frame = self.frame;
+
+        let radius_km = 50.0 + 700.0 / self.projection.effective_zoom();
 
         self.explosions.push(Explosion {
             lon,
@@ -532,6 +523,20 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Toggle between Mercator and Globe projection
+    pub fn toggle_projection(&mut self) {
+        let old = std::mem::replace(
+            &mut self.projection,
+            Projection::Mercator(Viewport::world(1, 1)), // placeholder
+        );
+        self.projection = old.toggle();
+    }
+
+    /// Whether we're in globe mode
+    pub fn is_globe(&self) -> bool {
+        matches!(self.projection, Projection::Globe(_))
     }
 
     /// Apply ongoing damage (fire/fallout) - small percentage casualties
