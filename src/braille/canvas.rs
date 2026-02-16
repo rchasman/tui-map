@@ -1,12 +1,24 @@
 /// Braille Unicode canvas for high-resolution terminal graphics.
 /// Each character cell represents a 2x4 pixel grid (8 dots).
 /// Unicode Braille patterns: U+2800 to U+28FF
+///
+/// Flat buffer layout: pixels[cy * width + cx] — single pointer chase,
+/// single memcpy on clone, cache-line friendly sequential access.
 #[derive(Clone)]
 pub struct BrailleCanvas {
     width: usize,  // Characters
     height: usize, // Characters
-    pixels: Vec<Vec<u8>>, // Bit patterns per char
+    pixels: Vec<u8>, // Flat row-major bit patterns
 }
+
+/// Braille bit position lookup: BIT_TABLE[y & 3][x & 1]
+/// Eliminates the branch in the tightest inner loop.
+static BIT_TABLE: [[u8; 2]; 4] = [
+    [0, 3], // y%4=0: bit 0 (left col) or 3 (right col)
+    [1, 4], // y%4=1: bit 1 or 4
+    [2, 5], // y%4=2: bit 2 or 5
+    [6, 7], // y%4=3: bit 6 or 7
+];
 
 impl BrailleCanvas {
     /// Create a new canvas with the given character dimensions.
@@ -15,7 +27,7 @@ impl BrailleCanvas {
         Self {
             width,
             height,
-            pixels: vec![vec![0u8; width]; height],
+            pixels: vec![0u8; width * height],
         }
     }
 
@@ -36,21 +48,16 @@ impl BrailleCanvas {
             return;
         }
 
-        // Bit manipulation formula instead of match - Carmack style
-        // Left col (x&1=0): bits 0,1,2,6 for y=0,1,2,3
-        // Right col (x&1=1): bits 3,4,5,7 for y=0,1,2,3
-        let y_mod = y & 3;
-        let bit_pos = if y_mod == 3 {
-            6 + (x & 1)  // y=3: bit 6 (left) or 7 (right)
-        } else {
-            y_mod + (x & 1) * 3  // y<3: 0,1,2 (left) or 3,4,5 (right)
-        };
-        let bit = 1u8 << bit_pos;
+        let bit = 1u8 << BIT_TABLE[y & 3][x & 1];
 
-        self.pixels[cy][cx] |= bit;
+        // Safety: bounds checked above
+        unsafe {
+            *self.pixels.get_unchecked_mut(cy * self.width + cx) |= bit;
+        }
     }
 
     /// Set a pixel using signed coordinates (ignores negative values)
+    #[inline(always)]
     pub fn set_pixel_signed(&mut self, x: i32, y: i32) {
         if x >= 0 && y >= 0 {
             self.set_pixel(x as usize, y as usize);
@@ -60,13 +67,8 @@ impl BrailleCanvas {
     /// Convert the canvas to a string of Braille characters
     #[cfg(test)]
     pub fn to_string(&self) -> String {
-        self.pixels
-            .iter()
-            .map(|row| {
-                row.iter()
-                    .map(|&b| char::from_u32(0x2800 + b as u32).unwrap_or(' '))
-                    .collect::<String>()
-            })
+        (0..self.height)
+            .map(|row| self.row_to_string(row))
             .collect::<Vec<_>>()
             .join("\n")
     }
@@ -76,7 +78,8 @@ impl BrailleCanvas {
         if row >= self.height {
             return String::new();
         }
-        self.pixels[row]
+        let start = row * self.width;
+        self.pixels[start..start + self.width]
             .iter()
             .map(|&b| char::from_u32(0x2800 + b as u32).unwrap_or(' '))
             .collect()
