@@ -497,9 +497,13 @@ impl App {
             }
         }
 
-        // Rebuild both fire grids: coarse for zoom-out, fine for medium zoom
-        self.fire_grid.rebuild(&self.fires);
-        self.fire_grid_fine.rebuild(&self.fires);
+        // Rebuild fire grids every 5 frames — fires spread/decay slowly,
+        // so the grid is accurate enough between rebuilds.
+        // Saves 60K grid insertions/frame → 12K/frame (5× reduction).
+        if self.frame % 5 == 0 {
+            self.fire_grid.rebuild(&self.fires);
+            self.fire_grid_fine.rebuild(&self.fires);
+        }
 
         !self.explosions.is_empty() || !self.fires.is_empty() || !self.fallout.is_empty()
     }
