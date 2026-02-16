@@ -49,7 +49,7 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent) {
         MouseEventKind::ScrollRight => app.pan(15, 0),
         // Click and drag to pan
         MouseEventKind::Down(MouseButton::Left) => {
-            app.last_mouse = Some((mouse.column, mouse.row));
+            app.start_drag(mouse.column, mouse.row);
         }
         MouseEventKind::Drag(MouseButton::Left) => {
             app.handle_drag(mouse.column, mouse.row);

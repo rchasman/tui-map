@@ -112,10 +112,10 @@ impl GlobeViewport {
     }
 
     /// Rotate the globe by a pixel drag delta.
+    /// Positive dx = dragged left → globe center shifts east (surface follows cursor).
     pub fn rotate_drag(&mut self, dx: i32, dy: i32) {
-        // Convert pixel delta to angular rotation (radians)
-        let angle_x = -(dx as f64) / self.radius;
-        let angle_y = (dy as f64) / self.radius;
+        let angle_x = (dx as f64) / self.radius;
+        let angle_y = -(dy as f64) / self.radius;
 
         // Rotate around up axis (horizontal drag → longitude change)
         if angle_x.abs() > 1e-10 {
@@ -129,6 +129,24 @@ impl GlobeViewport {
         // Rotate around right axis (vertical drag → latitude change)
         if angle_y.abs() > 1e-10 {
             let (sin_a, cos_a) = angle_y.sin_cos();
+            let new_forward = self.forward * cos_a + self.up * sin_a;
+            let new_up = self.up * cos_a - self.forward * sin_a;
+            self.forward = new_forward.normalize();
+            self.up = new_up.normalize();
+        }
+    }
+
+    /// Apply angular momentum (radians) — used for inertial spin after drag release.
+    pub fn apply_momentum(&mut self, vel_x: f64, vel_y: f64) {
+        if vel_x.abs() > 1e-10 {
+            let (sin_a, cos_a) = vel_x.sin_cos();
+            let new_forward = self.forward * cos_a + self.right * sin_a;
+            let new_right = self.right * cos_a - self.forward * sin_a;
+            self.forward = new_forward.normalize();
+            self.right = new_right.normalize();
+        }
+        if vel_y.abs() > 1e-10 {
+            let (sin_a, cos_a) = vel_y.sin_cos();
             let new_forward = self.forward * cos_a + self.up * sin_a;
             let new_up = self.up * cos_a - self.forward * sin_a;
             self.forward = new_forward.normalize();

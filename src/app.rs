@@ -116,6 +116,8 @@ pub struct App {
     pub frame: u64,
     /// Last frame when a nuke was launched (for cooldown)
     last_nuke_frame: u64,
+    /// Globe spin momentum (angular velocity in radians/frame)
+    spin_velocity: (f64, f64),
 }
 
 impl App {
@@ -141,6 +143,7 @@ impl App {
             casualties: 0,
             frame: 0,
             last_nuke_frame: 0,
+            spin_velocity: (0.0, 0.0),
         }
     }
 
@@ -220,13 +223,28 @@ impl App {
             let zoom = self.projection.effective_zoom();
             let scale = if zoom < 2.0 { 2 } else if zoom < 4.0 { 3 } else { 4 };
             self.pan(dx * scale, dy * scale);
+
+            // Track angular velocity for globe momentum
+            if let Projection::Globe(ref g) = self.projection {
+                let ax = (dx * scale) as f64 / g.radius;
+                let ay = -(dy * scale) as f64 / g.radius;
+                // EMA smoothing to filter jitter from individual mouse events
+                self.spin_velocity.0 = self.spin_velocity.0 * 0.5 + ax * 0.5;
+                self.spin_velocity.1 = self.spin_velocity.1 * 0.5 + ay * 0.5;
+            }
         }
         self.last_mouse = Some((x, y));
     }
 
-    /// Reset drag state when mouse button released
+    /// Reset drag state when mouse button released — momentum persists
     pub fn end_drag(&mut self) {
         self.last_mouse = None;
+    }
+
+    /// Cancel spin momentum (called on new drag start)
+    pub fn start_drag(&mut self, x: u16, y: u16) {
+        self.spin_velocity = (0.0, 0.0);
+        self.last_mouse = Some((x, y));
     }
 
     /// Update mouse cursor position
@@ -387,6 +405,19 @@ impl App {
     pub fn update_explosions(&mut self) -> bool {
         // Increment global frame counter for randomness
         self.frame = self.frame.wrapping_add(1);
+
+        // Apply globe spin momentum (only when not dragging)
+        if self.last_mouse.is_none() {
+            let (vx, vy) = self.spin_velocity;
+            if vx.abs() > 0.0001 || vy.abs() > 0.0001 {
+                if let Projection::Globe(ref mut g) = self.projection {
+                    g.apply_momentum(vx, vy);
+                }
+                // Exponential decay — ~3 seconds to stop at 60fps (0.95^180 ≈ 0.0001)
+                self.spin_velocity.0 *= 0.95;
+                self.spin_velocity.1 *= 0.95;
+            }
+        }
 
         self.explosions.retain_mut(|exp| {
             exp.frame += 1;
