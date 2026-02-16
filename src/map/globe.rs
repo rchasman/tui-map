@@ -394,3 +394,89 @@ pub fn lonlat_to_vec3(lon: f64, lat: f64) -> DVec3 {
     )
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const EPS: f64 = 1e-10;
+
+    fn assert_near(a: DVec3, b: DVec3, label: &str) {
+        assert!((a - b).length() < EPS, "{label}: got {a:?}, expected {b:?}");
+    }
+
+    #[test]
+    fn frame_east_north_at_equator_greenwich() {
+        // lon=0, lat=0: forward=(1,0,0), right=east=(0,1,0), up=north=(0,0,1)
+        let g = GlobeViewport::new(0.0, 0.0, 100.0, 200, 200);
+        assert_near(g.forward, DVec3::new(1.0, 0.0, 0.0), "forward");
+        assert_near(g.right, DVec3::new(0.0, 1.0, 0.0), "right=east");
+        assert_near(g.up, DVec3::new(0.0, 0.0, 1.0), "up=north");
+    }
+
+    #[test]
+    fn frame_east_north_at_lon90() {
+        // lon=90, lat=0: forward=(0,1,0), right=east=(-1,0,0), up=north=(0,0,1)
+        let g = GlobeViewport::new(90.0, 0.0, 100.0, 200, 200);
+        assert_near(g.forward, DVec3::new(0.0, 1.0, 0.0), "forward");
+        assert_near(g.right, DVec3::new(-1.0, 0.0, 0.0), "right=east");
+        assert_near(g.up, DVec3::new(0.0, 0.0, 1.0), "up=north");
+    }
+
+    #[test]
+    fn frame_east_north_at_lat45() {
+        // lon=0, lat=45: right still points east=(0,1,0)
+        let g = GlobeViewport::new(0.0, 45.0, 100.0, 200, 200);
+        assert_near(g.right, DVec3::new(0.0, 1.0, 0.0), "right=east");
+        // up should point north: away from equator, upward
+        assert!(g.up.z > 0.0, "up.z should be positive (northward)");
+        assert!(g.up.x < 0.0, "up.x should be negative (tilted away from equator)");
+    }
+
+    #[test]
+    fn frame_survives_drag_rotation() {
+        // After drag, right should still be east, up should still be north
+        let mut g = GlobeViewport::new(0.0, 0.0, 100.0, 200, 200);
+        g.rotate_drag(50, 30); // arbitrary drag
+        g.rotate_drag(-20, 10);
+        g.rotate_drag(10, -40);
+
+        let (lon, lat) = (g.center_lon(), g.center_lat());
+        let fresh = GlobeViewport::new(lon, lat, 100.0, 200, 200);
+
+        assert_near(g.right, fresh.right, "right after drag should match fresh construction");
+        assert_near(g.up, fresh.up, "up after drag should match fresh construction");
+    }
+
+    #[test]
+    fn frame_survives_momentum() {
+        let mut g = GlobeViewport::new(30.0, 20.0, 100.0, 200, 200);
+        for _ in 0..100 {
+            g.apply_momentum(0.05, 0.0);
+        }
+
+        let (lon, lat) = (g.center_lon(), g.center_lat());
+        let fresh = GlobeViewport::new(lon, lat, 100.0, 200, 200);
+
+        assert_near(g.right, fresh.right, "right after momentum should match fresh");
+        assert_near(g.up, fresh.up, "up after momentum should match fresh");
+    }
+
+    #[test]
+    fn east_point_projects_right_of_center() {
+        // A point slightly east of center should appear to the RIGHT on screen
+        let g = GlobeViewport::new(0.0, 0.0, 100.0, 200, 200);
+        let center = g.project(0.0, 0.0).unwrap();
+        let east = g.project(10.0, 0.0).unwrap();
+        assert!(east.0 > center.0, "east point should be right of center: east.x={}, center.x={}", east.0, center.0);
+    }
+
+    #[test]
+    fn north_point_projects_above_center() {
+        // A point north of center should appear ABOVE on screen (lower py)
+        let g = GlobeViewport::new(0.0, 0.0, 100.0, 200, 200);
+        let center = g.project(0.0, 0.0).unwrap();
+        let north = g.project(0.0, 10.0).unwrap();
+        assert!(north.1 < center.1, "north point should be above center: north.y={}, center.y={}", north.1, center.1);
+    }
+}
+
