@@ -166,6 +166,26 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
 
     {
         let grid = if deg_per_char >= 1.0 { &app.fire_grid } else { &app.fire_grid_fine };
+        let res = grid.resolution;
+
+        // Compute cell fill padding ONCE per frame to prevent gaps at high zoom.
+        // When grid cells span > 1 char, we fill a rect around each center.
+        let cell_dots_h = projection.deg_to_pixels(res);
+        let pad_x = ((cell_dots_h / 2.0 - 1.0) / 2.0).max(0.0).ceil() as i32;
+
+        let mid_lat = ((vp_min_lat + vp_max_lat) / 2.0).clamp(-85.0, 85.0);
+        let mid_lon = (vp_min_lon + vp_max_lon) / 2.0;
+        let pad_y = match (
+            projection.project_point(mid_lon, mid_lat + res / 2.0),
+            projection.project_point(mid_lon, mid_lat - res / 2.0),
+        ) {
+            (Some((_, y0)), Some((_, y1))) => {
+                let cell_dots_v = (y1 - y0).unsigned_abs() as f64;
+                ((cell_dots_v / 4.0 - 1.0) / 2.0).max(0.0).ceil() as i32
+            }
+            _ => 0,
+        };
+
         let mut fires_data = grid.fires_in_region(
             vp_min_lon.max(-180.0), vp_min_lat, vp_max_lon.min(180.0), vp_max_lat,
         );
@@ -180,7 +200,17 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
 
         for (lon, lat, intensity, weapon) in fires_data {
             if let Some((px, py)) = projection.project_point(lon, lat) {
-                add_fire((px / 2) as usize, (py / 4) as usize, intensity, weapon);
+                let cx = (px / 2) as i32;
+                let cy = (py / 4) as i32;
+                for dy in -pad_y..=pad_y {
+                    for dx in -pad_x..=pad_x {
+                        let fx = cx + dx;
+                        let fy = cy + dy;
+                        if fx >= 0 && fy >= 0 {
+                            add_fire(fx as usize, fy as usize, intensity, weapon);
+                        }
+                    }
+                }
             }
         }
     }
