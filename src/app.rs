@@ -1,6 +1,7 @@
 use crate::geo::{normalize_lat, normalize_lon};
 use crate::hash::{hash3, rand_simple};
 use crate::map::{Lod, MapRenderer, Projection, Viewport};
+use crate::map::globe::GlobeViewport;
 
 /// A nuclear explosion with position and animation frame
 #[derive(Clone)]
@@ -130,7 +131,7 @@ impl App {
         let pixel_height = inner_height * 4;
 
         Self {
-            projection: Projection::Mercator(Viewport::world(pixel_width, pixel_height)),
+            projection: Projection::Globe(GlobeViewport::new(0.0, 20.0, pixel_width as f64 * 0.35, pixel_width, pixel_height)),
             map_renderer: MapRenderer::new(),
             should_quit: false,
             last_mouse: None,
