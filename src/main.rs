@@ -7,7 +7,7 @@ mod map;
 mod ui;
 
 use anyhow::Result;
-use app::App;
+use app::{App, WeaponType};
 use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseButton,
     MouseEvent, MouseEventKind,
@@ -133,7 +133,13 @@ fn run(terminal: &mut DefaultTerminal) -> Result<()> {
                                 app.toggle_projection();
                             }
 
-                            // Launch nuke at cursor
+                            // Weapon selection
+                            KeyCode::Char('1') => app.select_weapon(WeaponType::Nuke),
+                            KeyCode::Char('2') => app.select_weapon(WeaponType::Bio),
+                            KeyCode::Char('3') => app.select_weapon(WeaponType::Emp),
+                            KeyCode::Char('4') => app.select_weapon(WeaponType::Chem),
+
+                            // Launch weapon at cursor
                             KeyCode::Char(' ') => {
                                 if let Some((col, row)) = app.mouse_pos {
                                     app.launch_nuke(col, row);
