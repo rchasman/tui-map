@@ -156,7 +156,7 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
     // Hierarchical fire rendering based on zoom
     let deg_per_char = 360.0 / (zoom * inner.width as f64);
 
-    if deg_per_char >= 0.25 {
+    {
         let grid = if deg_per_char >= 1.0 { &app.fire_grid } else { &app.fire_grid_fine };
         let mut fires_data = grid.fires_in_region(
             vp_min_lon.max(-180.0), vp_min_lat, vp_max_lon.min(180.0), vp_max_lat,
@@ -173,28 +173,6 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
         for (lon, lat, intensity) in fires_data {
             if let Some((px, py)) = projection.project_point(lon, lat) {
                 add_fire((px / 2) as usize, (py / 4) as usize, intensity);
-            }
-        }
-    } else {
-        for fire in &app.fires {
-            if fire.intensity < 10 {
-                continue;
-            }
-            let in_lat = fire.lat >= vp_min_lat && fire.lat <= vp_max_lat;
-            if !in_lat {
-                continue;
-            }
-            if !is_globe {
-                let in_lon = (fire.lon >= vp_min_lon && fire.lon <= vp_max_lon) ||
-                             (fire.lon - 360.0 >= vp_min_lon && fire.lon - 360.0 <= vp_max_lon) ||
-                             (fire.lon + 360.0 >= vp_min_lon && fire.lon + 360.0 <= vp_max_lon);
-                if !in_lon {
-                    continue;
-                }
-            }
-
-            if let Some((px, py)) = projection.project_point(fire.lon, fire.lat) {
-                add_fire((px / 2) as usize, (py / 4) as usize, fire.intensity);
             }
         }
     }
