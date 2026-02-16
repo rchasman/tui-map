@@ -74,6 +74,7 @@ impl BrailleCanvas {
     }
 
     /// Get a specific row as a string (for line-by-line rendering)
+    #[cfg(test)]
     pub fn row_to_string(&self, row: usize) -> String {
         if row >= self.height {
             return String::new();
@@ -83,11 +84,6 @@ impl BrailleCanvas {
             .iter()
             .map(|&b| char::from_u32(0x2800 + b as u32).unwrap_or(' '))
             .collect()
-    }
-
-    /// Get all rows as an iterator of strings
-    pub fn rows(&self) -> impl Iterator<Item = String> + '_ {
-        (0..self.height).map(|i| self.row_to_string(i))
     }
 
     /// Raw byte slice for a row — zero allocation, for direct buffer writes.
