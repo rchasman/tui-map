@@ -326,21 +326,22 @@ impl Widget for MapWidget {
             let x = area.x + *lx;
             let y = area.y + *ly;
 
-            let is_dead = text.starts_with('~') || text.starts_with('☠');
-            let display_text_raw = if text.starts_with('~') { &text[1..] } else { text.as_str() };
+            let is_dead = *health == 0.0;
+            let display_text_raw = text.as_str();
 
             let is_marker = text.len() <= 3 && matches!(text.chars().next(), Some('⚜' | '★' | '◆' | '■' | '●' | '○' | '◦' | '·' | '☠'));
 
             // Style dims with damage: White at full health → DarkGray at death
+            // bg(Reset) makes spaces opaque over fires
             let style = if is_dead {
                 if is_marker {
-                    Style::default().fg(Color::DarkGray)
+                    Style::default().fg(Color::DarkGray).bg(Color::Reset)
                 } else {
-                    Style::default().fg(Color::DarkGray).add_modifier(Modifier::CROSSED_OUT)
+                    Style::default().fg(Color::DarkGray).bg(Color::Reset).add_modifier(Modifier::CROSSED_OUT)
                 }
             } else {
                 let brightness = (health * 200.0 + 55.0) as u8; // 55..255
-                Style::default().fg(Color::Rgb(brightness, brightness, brightness))
+                Style::default().fg(Color::Rgb(brightness, brightness, brightness)).bg(Color::Reset)
             };
 
             // Label truncates as population diminishes (markers always 1 char)
