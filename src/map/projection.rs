@@ -1,3 +1,4 @@
+use crate::map::globe::GlobeViewport;
 use std::f64::consts::PI;
 
 /// Longitude offsets for handling date-line wrapping.
@@ -181,6 +182,131 @@ impl Viewport {
             && min_x < self.width as i32
             && max_y >= 0
             && min_y < self.height as i32
+    }
+}
+
+/// Projection enum: Mercator flat map or orthographic globe.
+/// Two variants, constant-per-frame branching — the branch predictor handles this.
+#[derive(Clone)]
+pub enum Projection {
+    Mercator(Viewport),
+    Globe(GlobeViewport),
+}
+
+impl Projection {
+    /// Pan (Mercator) or rotate (Globe) by pixel delta.
+    pub fn pan(&mut self, dx: i32, dy: i32) {
+        match self {
+            Projection::Mercator(vp) => vp.pan(dx, dy),
+            Projection::Globe(g) => g.rotate_drag(dx, dy),
+        }
+    }
+
+    pub fn zoom_in(&mut self) {
+        match self {
+            Projection::Mercator(vp) => vp.zoom_in(),
+            Projection::Globe(g) => g.zoom_in(),
+        }
+    }
+
+    pub fn zoom_out(&mut self) {
+        match self {
+            Projection::Mercator(vp) => vp.zoom_out(),
+            Projection::Globe(g) => g.zoom_out(),
+        }
+    }
+
+    pub fn zoom_in_at(&mut self, px: i32, py: i32) {
+        match self {
+            Projection::Mercator(vp) => vp.zoom_in_at(px, py),
+            Projection::Globe(g) => g.zoom_in_at(px, py),
+        }
+    }
+
+    pub fn zoom_out_at(&mut self, px: i32, py: i32) {
+        match self {
+            Projection::Mercator(vp) => vp.zoom_out_at(px, py),
+            Projection::Globe(g) => g.zoom_out_at(px, py),
+        }
+    }
+
+    pub fn set_size(&mut self, width: usize, height: usize) {
+        match self {
+            Projection::Mercator(vp) => {
+                vp.width = width;
+                vp.height = height;
+            }
+            Projection::Globe(g) => g.set_size(width, height),
+        }
+    }
+
+    /// Unproject pixel to geo coords. Returns `None` on globe if outside sphere.
+    pub fn unproject(&self, px: i32, py: i32) -> Option<(f64, f64)> {
+        match self {
+            Projection::Mercator(vp) => Some(vp.unproject(px, py)),
+            Projection::Globe(g) => g.unproject(px, py),
+        }
+    }
+
+    /// Project a geographic point to screen pixels.
+    /// Mercator tries wrap offsets; globe returns None for back-face.
+    pub fn project_point(&self, lon: f64, lat: f64) -> Option<(i32, i32)> {
+        match self {
+            Projection::Mercator(vp) => vp.project_wrapped_first(lon, lat),
+            Projection::Globe(g) => g.project(lon, lat),
+        }
+    }
+
+    /// Effective zoom level, normalized so 1.0 = world view for both projections.
+    pub fn effective_zoom(&self) -> f64 {
+        match self {
+            Projection::Mercator(vp) => vp.zoom,
+            Projection::Globe(g) => g.effective_zoom(),
+        }
+    }
+
+    /// Convert geographic degrees to screen pixels for radius rendering.
+    pub fn deg_to_pixels(&self, degrees: f64) -> f64 {
+        match self {
+            Projection::Mercator(vp) => degrees * vp.zoom * vp.width as f64 / 360.0,
+            Projection::Globe(g) => g.deg_to_pixels(degrees),
+        }
+    }
+
+    /// Toggle between Mercator and Globe, preserving center and zoom.
+    pub fn toggle(self) -> Self {
+        match self {
+            Projection::Mercator(vp) => Projection::Globe(GlobeViewport::from_mercator(&vp)),
+            Projection::Globe(g) => Projection::Mercator(g.to_mercator()),
+        }
+    }
+
+    pub fn width(&self) -> usize {
+        match self {
+            Projection::Mercator(vp) => vp.width,
+            Projection::Globe(g) => g.width,
+        }
+    }
+
+    pub fn height(&self) -> usize {
+        match self {
+            Projection::Mercator(vp) => vp.height,
+            Projection::Globe(g) => g.height,
+        }
+    }
+
+    pub fn center_lon(&self) -> f64 {
+        match self {
+            Projection::Mercator(vp) => vp.center_lon,
+            Projection::Globe(g) => g.center_lon(),
+        }
+    }
+
+    pub fn center_lat(&self) -> f64 {
+        match self {
+            Projection::Mercator(vp) => vp.center_lat,
+            Projection::Globe(g) => g.center_lat(),
+        }
     }
 }
 
