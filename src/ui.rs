@@ -245,22 +245,18 @@ struct MapWidget {
 }
 
 impl MapWidget {
-    /// Render a braille canvas layer with a specific color
+    /// Render a braille canvas layer with a specific color.
+    /// Reads raw bytes directly — zero String allocations per frame.
     fn render_layer(&self, canvas: &crate::braille::BrailleCanvas, color: Color, area: Rect, buf: &mut Buffer) {
-        for (row_idx, row_str) in canvas.rows().enumerate() {
-            if row_idx >= area.height as usize {
-                break;
-            }
+        let rows = canvas.char_height().min(area.height as usize);
+        for row_idx in 0..rows {
             let y = area.y + row_idx as u16;
-
-            for (col_idx, ch) in row_str.chars().enumerate() {
+            for (col_idx, &b) in canvas.row_raw(row_idx).iter().enumerate() {
                 if col_idx >= area.width as usize {
                     break;
                 }
-                // Skip empty braille characters (U+2800)
-                if ch == '\u{2800}' {
-                    continue;
-                }
+                if b == 0 { continue; } // skip empty
+                let ch = unsafe { char::from_u32_unchecked(0x2800 + b as u32) };
                 let x = area.x + col_idx as u16;
                 buf[(x, y)].set_char(ch).set_fg(color);
             }

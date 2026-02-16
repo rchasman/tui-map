@@ -89,6 +89,19 @@ impl BrailleCanvas {
     pub fn rows(&self) -> impl Iterator<Item = String> + '_ {
         (0..self.height).map(|i| self.row_to_string(i))
     }
+
+    /// Raw byte slice for a row — zero allocation, for direct buffer writes.
+    #[inline(always)]
+    pub fn row_raw(&self, row: usize) -> &[u8] {
+        let start = row * self.width;
+        &self.pixels[start..start + self.width]
+    }
+
+    /// Number of character rows.
+    #[inline(always)]
+    pub fn char_height(&self) -> usize {
+        self.height
+    }
 }
 
 #[cfg(test)]
