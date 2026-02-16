@@ -281,20 +281,6 @@ impl Projection {
         }
     }
 
-    pub fn width(&self) -> usize {
-        match self {
-            Projection::Mercator(vp) => vp.width,
-            Projection::Globe(g) => g.width,
-        }
-    }
-
-    pub fn height(&self) -> usize {
-        match self {
-            Projection::Mercator(vp) => vp.height,
-            Projection::Globe(g) => g.height,
-        }
-    }
-
     pub fn center_lon(&self) -> f64 {
         match self {
             Projection::Mercator(vp) => vp.center_lon,

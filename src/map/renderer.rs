@@ -1,7 +1,8 @@
 use crate::braille::BrailleCanvas;
 use crate::map::geometry::draw_line;
+use crate::map::globe::{self, GlobeViewport};
 use crate::geo::{normalize_lat, normalize_lon};
-use crate::map::projection::{Viewport, WRAP_OFFSETS};
+use crate::map::projection::{Projection, Viewport, WRAP_OFFSETS};
 use crate::map::spatial::{FeatureGrid, SpatialGrid};
 use std::cell::RefCell;
 
@@ -229,6 +230,7 @@ struct RenderCacheKey {
     center_lon: i64,  // Quantized to 0.001 degrees
     center_lat: i64,
     zoom: i64,        // Quantized to 0.01
+    is_globe: bool,
     show_coastlines: bool,
     show_borders: bool,
     show_states: bool,
@@ -236,13 +238,14 @@ struct RenderCacheKey {
 }
 
 impl RenderCacheKey {
-    fn from_viewport(viewport: &Viewport, width: usize, height: usize, settings: &DisplaySettings) -> Self {
+    fn from_projection(projection: &Projection, width: usize, height: usize, settings: &DisplaySettings) -> Self {
         Self {
             width,
             height,
-            center_lon: (viewport.center_lon * 1000.0) as i64,
-            center_lat: (viewport.center_lat * 1000.0) as i64,
-            zoom: (viewport.zoom * 100.0) as i64,
+            center_lon: (projection.center_lon() * 1000.0) as i64,
+            center_lat: (projection.center_lat() * 1000.0) as i64,
+            zoom: (projection.effective_zoom() * 100.0) as i64,
+            is_globe: matches!(projection, Projection::Globe(_)),
             show_coastlines: settings.show_coastlines,
             show_borders: settings.show_borders,
             show_states: settings.show_states,
@@ -573,7 +576,15 @@ impl MapRenderer {
     }
 
     /// Render all map features to separate layered canvases
-    pub fn render(&self, width: usize, height: usize, viewport: &Viewport) -> MapLayers {
+    pub fn render(&self, width: usize, height: usize, projection: &Projection) -> MapLayers {
+        match projection {
+            Projection::Mercator(viewport) => self.render_mercator(width, height, viewport),
+            Projection::Globe(globe) => self.render_globe(width, height, globe),
+        }
+    }
+
+    /// Mercator render path (existing logic, unchanged)
+    fn render_mercator(&self, width: usize, height: usize, viewport: &Viewport) -> MapLayers {
         let lod = Lod::from_zoom(viewport.zoom);
         let mut labels = Vec::new();
 
@@ -595,7 +606,7 @@ impl MapRenderer {
         let fg_max_lat = (vp_max_lat + pad).min(90.0);
 
         // Check if we can use cached static layers
-        let cache_key = RenderCacheKey::from_viewport(viewport, width, height, &self.settings);
+        let cache_key = RenderCacheKey::from_projection(&Projection::Mercator(viewport.clone()), width, height, &self.settings);
         let cache_borrow = self.cache.borrow();
         let use_cache = cache_borrow.as_ref().map(|c| c.key == cache_key).unwrap_or(false);
 
@@ -615,8 +626,6 @@ impl MapRenderer {
             let mut states_canvas = BrailleCanvas::new(width, height);
             let mut counties_canvas = BrailleCanvas::new(width, height);
 
-            // Coarse filter: spatial index query (padded) → candidate features
-            // Fine filter: draw_linestring's bbox check eliminates false positives
             if self.settings.show_coastlines {
                 let coastlines = self.get_coastlines(lod);
                 let grid = self.get_coastline_grid(lod);
@@ -662,16 +671,10 @@ impl MapRenderer {
 
         // Collect cities for glyph rendering (viewport-aware filtering with wrapping)
         if self.settings.show_cities {
-
-            // Query spatial grid for cities in viewport (with wrapping)
             let mut candidate_indices = Vec::new();
-
-            // Normal query
             candidate_indices.extend(
                 self.city_grid.query_bbox(vp_min_lon, vp_min_lat, vp_max_lon, vp_max_lat)
             );
-
-            // Wrapped queries (handle date line crossing)
             if vp_min_lon < -180.0 {
                 candidate_indices.extend(
                     self.city_grid.query_bbox(vp_min_lon + 360.0, vp_min_lat, 180.0, vp_max_lat)
@@ -683,88 +686,25 @@ impl MapRenderer {
                 );
             }
 
-            // First, collect all visible cities with their screen positions
-            // Try each city at 0°, +360°, and -360° longitude offsets
             let mut visible_cities: Vec<(&City, u16, u16)> = candidate_indices
                 .iter()
                 .filter_map(|&idx| self.city_grid.get(idx))
                 .flat_map(|city| {
-                    // Try normal position and wrapped positions
                     WRAP_OFFSETS.iter().filter_map(move |&offset| {
                         let ((px, py), _) = viewport.project_wrapped(city.lon, city.lat, offset);
-
-                        // Early rejection: negative coords or out of bounds
                         if px < 0 || py < 0 || !viewport.is_visible(px, py) {
                             return None;
                         }
-
                         Some((city, (px / 2) as u16, (py / 4) as u16))
                     })
                 })
                 .collect();
 
-            // Sort by population descending
             visible_cities.sort_by(|a, b| b.0.population.cmp(&a.0.population));
-
-            // Take top N based on zoom level
             let max_cities = Self::max_cities_for_zoom(viewport.zoom);
-
-            // Find max population in visible set for relative sizing
             let max_pop = visible_cities.first().map(|(c, _, _)| c.population).unwrap_or(1);
 
-            for (city, char_x, char_y) in visible_cities.into_iter().take(max_cities) {
-                let health = if city.original_population > 0 {
-                    city.population as f32 / city.original_population as f32
-                } else {
-                    1.0
-                };
-
-                // Dead city - skull marker
-                if city.population == 0 {
-                    labels.push((char_x, char_y, "☠".to_string(), 0.0));
-                    if self.settings.show_labels {
-                        if let Some(label_x) = char_x.checked_add(2) {
-                            labels.push((label_x, char_y, format!("~{}", city.name), 0.0));
-                        }
-                    }
-                    continue;
-                }
-
-                // Choose glyph based on city type and relative population
-                let ratio = city.population as f64 / max_pop.max(1) as f64;
-                let glyph = if city.is_capital {
-                    '⚜' // National capital - fleur-de-lis
-                } else if city.is_megacity || city.population >= 10_000_000 {
-                    '★' // Megacity (10M+)
-                } else if ratio > 0.6 || city.population >= 5_000_000 {
-                    '◆' // Major metro (5M+)
-                } else if ratio > 0.4 || city.population >= 2_000_000 {
-                    '■' // Large city (2M+)
-                } else if ratio > 0.2 || city.population >= 500_000 {
-                    '●' // City (500K+)
-                } else if ratio > 0.1 || city.population >= 100_000 {
-                    '○' // Small city (100K+)
-                } else if city.population >= 20_000 {
-                    '◦' // Town (20K+)
-                } else {
-                    '·' // Village
-                };
-
-                // Add city marker
-                labels.push((char_x, char_y, glyph.to_string(), health));
-
-                // Add label after marker
-                if self.settings.show_labels {
-                    if let Some(label_x) = char_x.checked_add(2) {
-                        let label = if self.settings.show_population {
-                            format!("{} ({})", city.name, format_population(city.population))
-                        } else {
-                            city.name.clone()
-                        };
-                        labels.push((label_x, char_y, label, health));
-                    }
-                }
-            }
+            self.collect_city_labels(&mut labels, visible_cities, max_cities, max_pop);
         }
 
         MapLayers {
@@ -773,6 +713,173 @@ impl MapRenderer {
             states: states_canvas,
             counties: counties_canvas,
             labels,
+        }
+    }
+
+    /// Globe render path: orthographic projection with great circle subdivision
+    fn render_globe(&self, width: usize, height: usize, globe: &GlobeViewport) -> MapLayers {
+        let zoom = globe.effective_zoom();
+        let lod = Lod::from_zoom(zoom);
+        let mut labels = Vec::new();
+
+        let (vp_min_lon, vp_min_lat, vp_max_lon, vp_max_lat) = globe.visible_bounds();
+
+        // Padded bounds for spatial queries
+        let pad = 5.0;
+        let fg_min_lon = (vp_min_lon - pad).max(-180.0);
+        let fg_max_lon = (vp_max_lon + pad).min(180.0);
+        let fg_min_lat = (vp_min_lat - pad).max(-90.0);
+        let fg_max_lat = (vp_max_lat + pad).min(90.0);
+
+        // Check cache
+        let cache_key = RenderCacheKey::from_projection(&Projection::Globe(globe.clone()), width, height, &self.settings);
+        let cache_borrow = self.cache.borrow();
+        let use_cache = cache_borrow.as_ref().map(|c| c.key == cache_key).unwrap_or(false);
+
+        let (coastlines_canvas, borders_canvas, states_canvas, counties_canvas) = if use_cache {
+            let cache = cache_borrow.as_ref().unwrap();
+            (
+                cache.coastlines.clone(),
+                cache.borders.clone(),
+                cache.states.clone(),
+                cache.counties.clone(),
+            )
+        } else {
+            drop(cache_borrow);
+
+            let mut coastlines_canvas = BrailleCanvas::new(width, height);
+            let mut borders_canvas = BrailleCanvas::new(width, height);
+            let mut states_canvas = BrailleCanvas::new(width, height);
+            let mut counties_canvas = BrailleCanvas::new(width, height);
+
+            // No wrap offsets needed for globe — natural wrapping
+            if self.settings.show_coastlines {
+                let coastlines = self.get_coastlines(lod);
+                let grid = self.get_coastline_grid(lod);
+                let candidates = Self::query_grid_wrapped(grid, fg_min_lon, fg_min_lat, fg_max_lon, fg_max_lat);
+                for &idx in &candidates {
+                    self.draw_linestring_globe(&mut coastlines_canvas, &coastlines[idx], globe);
+                }
+            }
+
+            if self.settings.show_borders {
+                let borders = self.get_borders(lod);
+                let grid = self.get_border_grid(lod);
+                let candidates = Self::query_grid_wrapped(grid, fg_min_lon, fg_min_lat, fg_max_lon, fg_max_lat);
+                for &idx in &candidates {
+                    self.draw_linestring_globe(&mut borders_canvas, &borders[idx], globe);
+                }
+
+                if self.settings.show_states && zoom >= 4.0 {
+                    let candidates = Self::query_grid_wrapped(&self.state_grid, fg_min_lon, fg_min_lat, fg_max_lon, fg_max_lat);
+                    for &idx in &candidates {
+                        self.draw_linestring_globe(&mut states_canvas, &self.states[idx], globe);
+                    }
+                }
+
+                if self.settings.show_counties && zoom >= 7.0 {
+                    let candidates = Self::query_grid_wrapped(&self.county_grid, fg_min_lon, fg_min_lat, fg_max_lon, fg_max_lat);
+                    for &idx in &candidates {
+                        self.draw_linestring_globe(&mut counties_canvas, &self.counties[idx], globe);
+                    }
+                }
+            }
+
+            *self.cache.borrow_mut() = Some(RenderCache {
+                key: cache_key,
+                coastlines: coastlines_canvas.clone(),
+                borders: borders_canvas.clone(),
+                states: states_canvas.clone(),
+                counties: counties_canvas.clone(),
+            });
+
+            (coastlines_canvas, borders_canvas, states_canvas, counties_canvas)
+        };
+
+        // Cities on globe
+        if self.settings.show_cities {
+            let candidate_indices = self.city_grid.query_bbox(
+                vp_min_lon, vp_min_lat, vp_max_lon, vp_max_lat
+            );
+
+            let mut visible_cities: Vec<(&City, u16, u16)> = candidate_indices
+                .iter()
+                .filter_map(|&idx| self.city_grid.get(idx))
+                .filter_map(|city| {
+                    let (px, py) = globe.project(city.lon, city.lat)?;
+                    if !globe.is_visible(px, py) {
+                        return None;
+                    }
+                    Some((city, (px / 2) as u16, (py / 4) as u16))
+                })
+                .collect();
+
+            visible_cities.sort_by(|a, b| b.0.population.cmp(&a.0.population));
+            let max_cities = Self::max_cities_for_zoom(zoom);
+            let max_pop = visible_cities.first().map(|(c, _, _)| c.population).unwrap_or(1);
+
+            self.collect_city_labels(&mut labels, visible_cities, max_cities, max_pop);
+        }
+
+        MapLayers {
+            coastlines: coastlines_canvas,
+            borders: borders_canvas,
+            states: states_canvas,
+            counties: counties_canvas,
+            labels,
+        }
+    }
+
+    /// Shared city label collection logic used by both render paths
+    fn collect_city_labels(&self, labels: &mut Vec<(u16, u16, String, f32)>, visible_cities: Vec<(&City, u16, u16)>, max_cities: usize, max_pop: u64) {
+        for (city, char_x, char_y) in visible_cities.into_iter().take(max_cities) {
+            let health = if city.original_population > 0 {
+                city.population as f32 / city.original_population as f32
+            } else {
+                1.0
+            };
+
+            if city.population == 0 {
+                labels.push((char_x, char_y, "☠".to_string(), 0.0));
+                if self.settings.show_labels {
+                    if let Some(label_x) = char_x.checked_add(2) {
+                        labels.push((label_x, char_y, format!("~{}", city.name), 0.0));
+                    }
+                }
+                continue;
+            }
+
+            let ratio = city.population as f64 / max_pop.max(1) as f64;
+            let glyph = if city.is_capital {
+                '⚜'
+            } else if city.is_megacity || city.population >= 10_000_000 {
+                '★'
+            } else if ratio > 0.6 || city.population >= 5_000_000 {
+                '◆'
+            } else if ratio > 0.4 || city.population >= 2_000_000 {
+                '■'
+            } else if ratio > 0.2 || city.population >= 500_000 {
+                '●'
+            } else if ratio > 0.1 || city.population >= 100_000 {
+                '○'
+            } else if city.population >= 20_000 {
+                '◦'
+            } else {
+                '·'
+            };
+
+            labels.push((char_x, char_y, glyph.to_string(), health));
+
+            if self.settings.show_labels {
+                if let Some(label_x) = char_x.checked_add(2) {
+                    let label = if self.settings.show_population {
+                        format!("{} ({})", city.name, format_population(city.population))
+                    } else {
+                        city.name.clone()
+                    };
+                    labels.push((label_x, char_y, label, health));
+                }
+            }
         }
     }
 
@@ -824,6 +931,46 @@ impl MapRenderer {
             }
 
             prev = Some((px, py));
+        }
+    }
+
+    /// Draw a linestring on the globe with great circle subdivision
+    fn draw_linestring_globe(&self, canvas: &mut BrailleCanvas, line: &LineString, globe: &GlobeViewport) {
+        if line.len() < 2 {
+            return;
+        }
+
+        let mut prev_screen: Option<(i32, i32)> = None;
+
+        for window in line.points.windows(2) {
+            let (lon0, lat0) = window[0];
+            let (lon1, lat1) = window[1];
+
+            // Project the start of the segment (only for the very first point)
+            if prev_screen.is_none() {
+                prev_screen = globe.project(lon0, lat0);
+            }
+
+            // Walk the great circle arc, projecting each interpolated point
+            globe::walk_great_circle(lon0, lat0, lon1, lat1, |lon, lat| {
+                match globe.project(lon, lat) {
+                    Some((px, py)) => {
+                        if let Some((prev_x, prev_y)) = prev_screen {
+                            let dist = (px - prev_x).abs() + (py - prev_y).abs();
+                            if dist < globe.width as i32 / 2
+                                && globe.line_might_be_visible((prev_x, prev_y), (px, py))
+                            {
+                                draw_line(canvas, prev_x, prev_y, px, py);
+                            }
+                        }
+                        prev_screen = Some((px, py));
+                    }
+                    None => {
+                        // Back-face: break the line
+                        prev_screen = None;
+                    }
+                }
+            });
         }
     }
 
