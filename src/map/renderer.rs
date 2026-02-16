@@ -592,21 +592,21 @@ impl MapRenderer {
     /// Get max number of cities to show based on zoom
     fn max_cities_for_zoom(zoom: f64) -> usize {
         if zoom > 20.0 {
-            800
+            1000
         } else if zoom > 15.0 {
-            400
+            600
         } else if zoom > 10.0 {
-            200
+            300
         } else if zoom > 6.0 {
-            100
+            150
         } else if zoom > 4.0 {
-            60
+            80
         } else if zoom > 3.0 {
-            40
+            50
         } else if zoom > 2.0 {
-            30
+            40
         } else {
-            20
+            30
         }
     }
 
@@ -740,9 +740,9 @@ impl MapRenderer {
                 })
                 .collect();
 
-            visible_cities.sort_by(|a, b| b.0.population.cmp(&a.0.population));
+            visible_cities.sort_by(|a, b| b.0.original_population.cmp(&a.0.original_population));
             let max_cities = Self::max_cities_for_zoom(viewport.zoom);
-            let max_pop = visible_cities.first().map(|(c, _, _)| c.population).unwrap_or(1);
+            let max_pop = visible_cities.first().map(|(c, _, _)| c.original_population).unwrap_or(1);
 
             self.collect_city_labels(&mut labels, visible_cities, max_cities, max_pop);
         }
@@ -859,9 +859,9 @@ impl MapRenderer {
                 })
                 .collect();
 
-            visible_cities.sort_by(|a, b| b.0.population.cmp(&a.0.population));
+            visible_cities.sort_by(|a, b| b.0.original_population.cmp(&a.0.original_population));
             let max_cities = Self::max_cities_for_zoom(zoom);
-            let max_pop = visible_cities.first().map(|(c, _, _)| c.population).unwrap_or(1);
+            let max_pop = visible_cities.first().map(|(c, _, _)| c.original_population).unwrap_or(1);
 
             self.collect_city_labels(&mut labels, visible_cities, max_cities, max_pop);
         }
@@ -896,7 +896,7 @@ impl MapRenderer {
                 continue;
             }
 
-            let ratio = city.population as f64 / max_pop.max(1) as f64;
+            let ratio = city.original_population as f64 / max_pop.max(1) as f64;
             let glyph = if city.is_capital {
                 '⚜'
             } else if city.is_megacity || city.population >= 10_000_000 {
