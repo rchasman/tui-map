@@ -66,6 +66,17 @@ pub struct Fallout {
     pub intensity: u16, // Decays slowly over many frames
 }
 
+/// Persistent gas cloud that expands as it decays
+#[derive(Clone)]
+pub struct GasCloud {
+    pub lon: f64,
+    pub lat: f64,
+    pub current_radius_km: f64,
+    pub max_radius_km: f64,
+    pub intensity: u16,
+    pub weapon_type: WeaponType,
+}
+
 /// Multi-resolution fire grid for viewport-aware rendering.
 /// Configurable cell resolution enables hierarchical spatial queries:
 /// coarse (1°) for zoomed-out, fine (0.25°) for medium zoom.
@@ -156,6 +167,8 @@ pub struct App {
     pub fire_grid_fine: FireGrid,
     /// Fallout zones
     pub fallout: Vec<Fallout>,
+    /// Persistent gas clouds (Bio/Chem)
+    pub gas_clouds: Vec<GasCloud>,
     /// Total casualties
     pub casualties: u64,
     /// Frame counter for animation randomness
@@ -188,6 +201,7 @@ impl App {
             fire_grid: FireGrid::new(1.0),
             fire_grid_fine: FireGrid::new(0.25),
             fallout: Vec::new(),
+            gas_clouds: Vec::new(),
             casualties: 0,
             active_weapon: WeaponType::Nuke,
             frame: 0,
@@ -346,6 +360,21 @@ impl App {
             radius_km,
             weapon_type: weapon,
         });
+
+        // Spawn gas clouds (Bio and Chem)
+        match weapon {
+            WeaponType::Bio | WeaponType::Chem => {
+                self.gas_clouds.push(GasCloud {
+                    lon,
+                    lat,
+                    current_radius_km: radius_km * 0.5,
+                    max_radius_km: radius_km * 3.0,
+                    intensity: 2000,
+                    weapon_type: weapon,
+                });
+            }
+            _ => {}
+        }
 
         // Spawn fires (weapon-dependent)
         match weapon {
@@ -556,6 +585,14 @@ impl App {
             zone.intensity > 0
         });
 
+        // Update gas clouds - expand radius asymptotically, decay intensity
+        self.gas_clouds.retain_mut(|cloud| {
+            let gap = cloud.max_radius_km - cloud.current_radius_km;
+            cloud.current_radius_km += gap * 0.005;
+            cloud.intensity = cloud.intensity.saturating_sub(1);
+            cloud.intensity > 0
+        });
+
         // Apply ongoing damage every 10 frames (imperceptible skip)
         // Flipped join: iterate cities and probe fire grid, not fires → city query.
         // O(7K cities) with O(1) grid lookups instead of O(25K fires) with HashMap queries.
@@ -573,6 +610,18 @@ impl App {
                     self.apply_ongoing_damage(lon, lat, radius_km, rate);
                 }
             }
+
+            // Gas cloud damage
+            for i in 0..self.gas_clouds.len() {
+                let cloud = &self.gas_clouds[i];
+                if cloud.intensity > 0 {
+                    let rate = (cloud.intensity as f64 / 10000.0) * 0.03;
+                    let lon = cloud.lon;
+                    let lat = cloud.lat;
+                    let radius_km = cloud.current_radius_km;
+                    self.apply_ongoing_damage(lon, lat, radius_km, rate);
+                }
+            }
         }
 
         // Rebuild fire grids every 5 frames — fires spread/decay slowly,
@@ -583,7 +632,7 @@ impl App {
             self.fire_grid_fine.rebuild(&self.fires);
         }
 
-        !self.explosions.is_empty() || !self.fires.is_empty() || !self.fallout.is_empty()
+        !self.explosions.is_empty() || !self.fires.is_empty() || !self.fallout.is_empty() || !self.gas_clouds.is_empty()
     }
 
     /// Flipped join: for each city, probe fire grid neighborhood to check if burning.
