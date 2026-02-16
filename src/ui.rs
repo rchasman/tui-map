@@ -1,4 +1,4 @@
-use crate::app::App;
+use crate::app::{App, WeaponType};
 use crate::hash::{hash2, hash3};
 use crate::map::{MapLayers, Projection, WRAP_OFFSETS};
 use ratatui::{
@@ -102,7 +102,7 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
                 continue;
             }
 
-            explosions.push(ExplosionRender { x: cx, y: cy, frame: exp.frame, radius });
+            explosions.push(ExplosionRender { x: cx, y: cy, frame: exp.frame, radius, weapon_type: exp.weapon_type });
         }
     }
 
@@ -113,17 +113,21 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
         explosions.truncate(MAX_VISIBLE_EXPLOSIONS);
     }
 
-    // Screen-space fire map: merge overlapping fires by tracking max intensity per cell
-    // This is O(1) lookup and avoids duplicate rendering
+    // Screen-space fire map: merge overlapping fires by tracking max intensity + weapon per cell
     let fire_map_width = inner.width as usize;
     let fire_map_height = inner.height as usize;
-    let mut fire_map: Vec<u8> = vec![0; fire_map_width * fire_map_height];
+    let fire_map_size = fire_map_width * fire_map_height;
+    let mut fire_map_intensity: Vec<u8> = vec![0; fire_map_size];
+    let mut fire_map_weapon: Vec<WeaponType> = vec![WeaponType::Nuke; fire_map_size];
 
-    // Helper to merge fire into map (max intensity wins)
-    let mut add_fire = |cx: usize, cy: usize, intensity: u8| {
+    // Helper to merge fire into map (max intensity wins, keeps its weapon)
+    let mut add_fire = |cx: usize, cy: usize, intensity: u8, weapon: WeaponType| {
         if cx < fire_map_width && cy < fire_map_height {
             let idx = cy * fire_map_width + cx;
-            fire_map[idx] = fire_map[idx].max(intensity);
+            if intensity > fire_map_intensity[idx] {
+                fire_map_intensity[idx] = intensity;
+                fire_map_weapon[idx] = weapon;
+            }
         }
     };
 
@@ -170,31 +174,35 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
             }
         }
 
-        for (lon, lat, intensity) in fires_data {
+        for (lon, lat, intensity, weapon) in fires_data {
             if let Some((px, py)) = projection.project_point(lon, lat) {
-                add_fire((px / 2) as usize, (py / 4) as usize, intensity);
+                add_fire((px / 2) as usize, (py / 4) as usize, intensity, weapon);
             }
         }
     }
 
     // Convert fire map to FireRender vec (only non-zero cells)
-    let fires: Vec<FireRender> = fire_map
+    let fires: Vec<FireRender> = fire_map_intensity
         .iter()
         .enumerate()
         .filter_map(|(idx, &intensity)| {
             if intensity > 0 {
                 let x = (idx % fire_map_width) as u16;
                 let y = (idx / fire_map_width) as u16;
-                Some(FireRender { x, y, intensity })
+                Some(FireRender { x, y, intensity, weapon_type: fire_map_weapon[idx] })
             } else {
                 None
             }
         })
         .collect();
 
-    // Calculate blast radius for cursor reticle
+    // Calculate blast radius for cursor reticle (EMP is 1.5× wider)
     let cursor_blast_radius = if cursor_pos.is_some() {
-        let radius_km = 50.0 + 700.0 / zoom;
+        let base_radius = 50.0 + 700.0 / zoom;
+        let radius_km = match app.active_weapon {
+            WeaponType::Emp => base_radius * 1.5,
+            _ => base_radius,
+        };
         let degrees = radius_km / 111.0;
         let pixels = projection.deg_to_pixels(degrees) as u16;
         Some((pixels / 2).max(3))
@@ -207,6 +215,7 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
         layers,
         cursor_pos,
         cursor_blast_radius,
+        active_weapon: app.active_weapon,
         explosions,
         fires,
         inner_width: inner.width,
@@ -222,6 +231,7 @@ struct ExplosionRender {
     y: u16,
     frame: u8,
     radius: u16, // Visual radius in chars
+    weapon_type: WeaponType,
 }
 
 /// A fire to render
@@ -230,6 +240,7 @@ struct FireRender {
     x: u16,
     y: u16,
     intensity: u8,
+    weapon_type: WeaponType,
 }
 
 /// Custom widget that renders braille map with text labels overlaid
@@ -237,6 +248,7 @@ struct MapWidget {
     layers: MapLayers,
     cursor_pos: Option<(u16, u16)>,
     cursor_blast_radius: Option<u16>,
+    active_weapon: WeaponType,
     explosions: Vec<ExplosionRender>,
     fires: Vec<FireRender>,
     inner_width: u16,
@@ -279,33 +291,38 @@ impl Widget for MapWidget {
         // 4. Country borders (Cyan - on top so always visible above states)
         self.render_layer(&self.layers.borders, Color::Cyan, area, buf);
 
-        // Render fires - simple density-based blocks, color does the work
+        // Render fires — weapon-tinted color gradients
         for fire in &self.fires {
             let x = area.x + fire.x;
             let y = area.y + fire.y;
             if x < area.x + area.width && y < area.y + area.height {
-                // Subtle flicker in intensity only
                 let seed = hash3(fire.x as u64, fire.y as u64, self.frame);
-                let flicker = ((seed & 0x1F) as i16) - 16;  // -16 to +15 range (subtle)
+                let flicker = ((seed & 0x1F) as i16) - 16;
                 let vi = (fire.intensity as i16 + flicker).clamp(0, 255) as u8;
 
-                // Density blocks + color gradient - let color convey heat
-                let (r, g, b, ch) = if vi > 220 {
-                    (255, 255, 240, '█')  // White-hot
-                } else if vi > 180 {
-                    (255, 240, 100, '█')  // Bright yellow
-                } else if vi > 140 {
-                    (255, 180, 30, '▓')   // Yellow-orange
-                } else if vi > 100 {
-                    (255, 120, 0, '▓')    // Orange
-                } else if vi > 60 {
-                    (255, 60, 0, '▒')     // Orange-red
-                } else if vi > 30 {
-                    (200, 30, 0, '▒')     // Red
-                } else if vi > 15 {
-                    (140, 20, 0, '░')     // Dark red
-                } else {
-                    (90, 10, 0, '░')      // Embers
+                let (r, g, b, ch) = match fire.weapon_type {
+                    WeaponType::Chem => {
+                        // Purple-tinted fire: white → magenta → purple → dark plum
+                        if vi > 220      { (255, 220, 255, '█') }
+                        else if vi > 180 { (240, 140, 255, '█') }
+                        else if vi > 140 { (200, 80, 220, '▓') }
+                        else if vi > 100 { (180, 40, 180, '▓') }
+                        else if vi > 60  { (140, 20, 140, '▒') }
+                        else if vi > 30  { (100, 10, 100, '▒') }
+                        else if vi > 15  { (70, 5, 70, '░') }
+                        else             { (45, 0, 45, '░') }
+                    }
+                    _ => {
+                        // Nuke (and any other): standard orange/red heat palette
+                        if vi > 220      { (255, 255, 240, '█') }
+                        else if vi > 180 { (255, 240, 100, '█') }
+                        else if vi > 140 { (255, 180, 30, '▓') }
+                        else if vi > 100 { (255, 120, 0, '▓') }
+                        else if vi > 60  { (255, 60, 0, '▒') }
+                        else if vi > 30  { (200, 30, 0, '▒') }
+                        else if vi > 15  { (140, 20, 0, '░') }
+                        else             { (90, 10, 0, '░') }
+                    }
                 };
 
                 buf[(x, y)].set_char(ch).set_fg(Color::Rgb(r, g, b));
@@ -358,205 +375,27 @@ impl Widget for MapWidget {
             }
         }
 
-        // Render explosions with RGB gradient mushroom cloud and shockwave
+        // Render explosions — dispatch per weapon type
         for exp in &self.explosions {
             let x = area.x + exp.x;
             let y = area.y + exp.y;
 
-            // Explosion expands quickly then billows - multi-stage expansion
-            let progress = if exp.frame < 20 {
-                // Fast initial expansion (0-20 frames)
-                (exp.frame as f32 / 20.0).powf(0.7)
-            } else if exp.frame < 40 {
-                // Billowing expansion (20-40 frames) - slower, fuller
-                1.0 + ((exp.frame - 20) as f32 / 20.0) * 0.3
-            } else {
-                // Full mushroom cloud (40-60 frames)
-                1.3
-            };
-            let max_r = exp.radius as f32 * progress;
-
-            // Mushroom cap rises and expands UPWARD with massive roiling top
-            let cap_height = (max_r * (2.0 + (exp.frame as f32 / 60.0) * 1.2)) as i16;  // Extends VERY high
-            let cap_width = max_r;
-
-            // Animation phases - extended for dramatic impact
-            let flash_phase = exp.frame < 8;      // Extended white-hot flash (8 frames)
-            let fireball_phase = exp.frame < 25;  // Long bright fireball phase (17 frames)
-            let cooling_phase = exp.frame < 45;   // Extended cooling/billowing (20 frames)
-            // Final smoke phase: 45-60 frames
-
-            // Draw mushroom cloud - ONLY UPWARD, nothing below cursor
-            let radius_i16 = exp.radius as i16;
-            let cap_height_f32 = cap_height as f32;
-
-            // Precompute frame-based seed components (hoist out of inner loop)
-            let frame_seed_component = self.frame + exp.frame as u64;
-
-            for dy in -cap_height..0 {
-                // Safe signed addition with bounds check BEFORE casting to u16
-                let py_signed = (y as i16) + dy;
-                if py_signed < 0 || py_signed >= (area.y + area.height) as i16 {
-                    continue; // Skip if off-screen (handles negative overflow)
-                }
-                let py = py_signed as u16;
-
-                let dy_sq = dy * dy;
-                let dy_f32 = dy as f32;
-                let height_ratio = -dy_f32 / cap_height_f32;
-
-                // Precompute height tier (hoist branching out of x loop)
-                let (base_width, height_mult, large_mult, fine_mult) = if height_ratio < 0.2 {
-                    (0.5, 0.4, 0.0, 0.5)  // Rising column
-                } else if height_ratio < 0.5 {
-                    (0.9, 1.5, 0.7, 0.3)  // Transition
-                } else if height_ratio < 0.75 {
-                    (1.4, 2.0, 1.2, 0.4)  // Lower cap
-                } else {
-                    (1.9, 2.5, 2.0, 0.8)  // Roiling top
-                };
-
-                let height_component = if height_ratio < 0.2 {
-                    height_ratio * height_mult
-                } else if height_ratio < 0.5 {
-                    (height_ratio - 0.2) * height_mult
-                } else if height_ratio < 0.75 {
-                    (height_ratio - 0.5) * height_mult
-                } else {
-                    (height_ratio - 0.75) * height_mult
-                };
-
-                for dx in -(radius_i16)..=(radius_i16) {
-                    let dist_sq = (dx * dx + dy_sq) as f32;
-
-                    // Multi-scale turbulence (compute both at once)
-                    let dx_f32 = dx as f32;
-                    let angle = dx_f32.atan2(dy_f32);
-                    let large_turb_seed = hash2((angle * 1000.0) as u64, self.frame / 5);
-                    let large_turbulence = ((large_turb_seed & 0xFF) as f32 / 255.0 - 0.5) * 0.6;
-
-                    let fine_turb_seed = hash3(dx as u64, dy as u64, frame_seed_component);
-                    let fine_turbulence = ((fine_turb_seed & 0xFF) as f32 / 255.0 - 0.5) * 0.4;
-
-                    // Height-based width calculation (branchless tier system)
-                    let height_factor = base_width + height_component +
-                                       large_turbulence * large_mult +
-                                       fine_turbulence * fine_mult;
-
-                    let effective_width_sq = (cap_width * height_factor) * (cap_width * height_factor);
-                    let in_cloud = dist_sq <= effective_width_sq;
-
-                    if in_cloud {
-                        // Safe signed addition with bounds check BEFORE casting to u16
-                        let px_signed = (x as i16) + dx;
-                        if px_signed < 0 || px_signed >= (area.x + area.width) as i16 {
-                            continue; // Skip if off-screen (handles negative overflow)
-                        }
-                        let px = px_signed as u16;
-
-                        // Calculate heat - combines radial and vertical position
-                        // Hottest at base (blast site), cooler as you rise and spread out
-                        let radial_dist = dist_sq.sqrt() / (cap_width * height_factor);
-                        let vertical_factor = (-dy as f32) / cap_height as f32;  // 0.0 at base, 1.0 at top
-
-                        // Heat calculation: hottest at base center, cooler at edges and top
-                        let dist_norm = (radial_dist * 0.5 + vertical_factor * 0.5).min(1.0);
-
-                        // Chaotic flickering for explosion
-                        let seed = hash3(px as u64, py as u64, self.frame + exp.frame as u64);
-                        let flicker = ((seed & 0xFF) as f32) / 255.0;
-
-                        // RGB gradient with phase-based coloring
-                        let (r, g, b, ch) = if flash_phase {
-                            // Extended flash phase: blinding white hot core
-                            if dist_norm < 0.4 {
-                                // Intense white core with slight blue tint (hotter than white)
-                                (255, 255, 255, '█')
-                            } else if dist_norm < 0.7 {
-                                // Brilliant white-yellow transition
-                                (255, 250, 220, '█')
-                            } else {
-                                // Bright yellow outer flash
-                                (255, 240, 150, '▓')
-                            }
-                        } else if fireball_phase {
-                            // Extended fireball: dramatic center white → yellow → orange → red
-                            let phase_progress = (exp.frame - 8) as f32 / 17.0;  // 0.0 to 1.0 over fireball phase
-
-                            // Core stays white-hot longer then transitions
-                            let core_threshold = 0.3 - (phase_progress * 0.15);
-
-                            if dist_norm < core_threshold {
-                                // White-hot core that slowly shrinks
-                                (255, 255, 250, '█')
-                            } else if dist_norm < 0.4 {
-                                // Bright yellow - transitions to orange over time
-                                let r = 255;
-                                let g = (250.0 - phase_progress * 70.0) as u8;
-                                let b = (120.0 - phase_progress * 100.0) as u8;
-                                (r, g, b, '▓')
-                            } else if dist_norm < 0.6 {
-                                // Orange - gets redder over time
-                                let r = 255;
-                                let g = (180.0 - phase_progress * 100.0) as u8;
-                                let b = (20.0 * (1.0 - phase_progress)) as u8;
-                                (r, g, b, '▓')
-                            } else if dist_norm < 0.8 {
-                                // Red-orange outer region
-                                (255, 80, 0, '▒')
-                            } else {
-                                // Dark red billowing smoke
-                                (200, 40, 0, '░')
-                            }
-                        } else if cooling_phase {
-                            // Extended cooling: billowing orange/red → dark smoke with radioactive core
-                            let cooling_progress = (exp.frame - 25) as f32 / 20.0;  // 0.0 to 1.0
-
-                            if dist_norm < 0.15 {
-                                // Pulsing radioactive core
-                                let pulse_cycle = (exp.frame / 3) % 2;
-                                let pulse = if pulse_cycle == 0 { 60 } else { 20 };
-                                (255, pulse, 30, '☢')
-                            } else if dist_norm < 0.4 {
-                                // Flickering orange that darkens over time
-                                let base = 220.0 - (cooling_progress * 80.0);
-                                let r = (base - flicker * 40.0) as u8;
-                                let g = (60.0 - cooling_progress * 20.0) as u8;
-                                (r, g, 0, '▓')
-                            } else if dist_norm < 0.7 {
-                                // Dark orange transitioning to brown
-                                let r = (160.0 - cooling_progress * 50.0) as u8;
-                                let g = (40.0 - cooling_progress * 20.0) as u8;
-                                (r, g, 0, '▒')
-                            } else {
-                                // Brown smoke billowing outward
-                                let r = (100.0 - cooling_progress * 20.0) as u8;
-                                let g = (20.0 - cooling_progress * 10.0) as u8;
-                                (r, g, 0, '░')
-                            }
-                        } else {
-                            // Final phase: dark dissipating smoke
-                            let final_progress = (exp.frame - 45) as f32 / 15.0;
-                            let r = (80.0 - final_progress * 30.0) as u8;
-                            let g = (15.0 - final_progress * 10.0) as u8;
-                            let alpha = if dist_norm > 0.5 { '░' } else { '▒' };
-                            (r, g, 0, alpha)
-                        };
-
-                        buf[(px, py)].set_char(ch).set_fg(Color::Rgb(r, g, b));
-                    }
-                }
+            match exp.weapon_type {
+                WeaponType::Nuke => render_nuke_explosion(exp, x, y, area, self.frame, buf),
+                WeaponType::Bio => render_bio_explosion(exp, x, y, area, self.frame, buf),
+                WeaponType::Emp => render_emp_explosion(exp, x, y, area, self.frame, buf),
+                WeaponType::Chem => render_chem_explosion(exp, x, y, area, self.frame, buf),
             }
         }
 
-        // Render cursor blast radius circle
+        // Render cursor blast radius circle — color from active weapon
+        let reticle_color = weapon_color(self.active_weapon);
         if let Some((cx, cy)) = self.cursor_pos {
             if let Some(radius) = self.cursor_blast_radius {
                 let center_x = area.x as i32 + cx as i32;
                 let center_y = area.y as i32 + cy as i32;
                 let r = radius as i32;
 
-                // Compute bounds for circle drawing (optimize by not checking every point)
                 let min_x = (center_x - r).max(area.x as i32);
                 let max_x = (center_x + r).min((area.x + area.width) as i32 - 1);
                 let min_y = (center_y - r).max(area.y as i32);
@@ -565,7 +404,6 @@ impl Widget for MapWidget {
                 let r_sq = r * r;
                 let inner_r_sq = (r - 1).max(0) * (r - 1).max(0);
 
-                // Draw circle outline using distance check
                 for y in min_y..=max_y {
                     let dy = y - center_y;
                     let dy_sq = dy * dy;
@@ -574,22 +412,432 @@ impl Widget for MapWidget {
                         let dx = x - center_x;
                         let dist_sq = dx * dx + dy_sq;
 
-                        // Only render points near the circle perimeter (not filled)
                         if dist_sq >= inner_r_sq && dist_sq <= r_sq {
                             buf[(x as u16, y as u16)]
                                 .set_char('·')
-                                .set_fg(Color::Red);
+                                .set_fg(reticle_color);
                         }
                     }
                 }
 
-                // Draw center crosshair
                 if center_x >= area.x as i32 && center_x < (area.x + area.width) as i32 &&
                    center_y >= area.y as i32 && center_y < (area.y + area.height) as i32 {
                     buf[(center_x as u16, center_y as u16)]
                         .set_char('✕')
-                        .set_fg(Color::Red);
+                        .set_fg(reticle_color);
                 }
+            }
+        }
+    }
+}
+
+/// Map weapon type to its signature color
+fn weapon_color(weapon: WeaponType) -> Color {
+    match weapon {
+        WeaponType::Nuke => Color::Red,
+        WeaponType::Bio => Color::Rgb(0, 255, 50),
+        WeaponType::Emp => Color::Rgb(0, 200, 255),
+        WeaponType::Chem => Color::Rgb(200, 0, 200),
+    }
+}
+
+// ── Per-weapon explosion renderers ──────────────────────────────────────────
+
+/// Nuke: mushroom cloud rising UPWARD — white → yellow → orange → red → smoke
+fn render_nuke_explosion(exp: &ExplosionRender, x: u16, y: u16, area: Rect, global_frame: u64, buf: &mut Buffer) {
+    let progress = if exp.frame < 20 {
+        (exp.frame as f32 / 20.0).powf(0.7)
+    } else if exp.frame < 40 {
+        1.0 + ((exp.frame - 20) as f32 / 20.0) * 0.3
+    } else {
+        1.3
+    };
+    let max_r = exp.radius as f32 * progress;
+    let cap_height = (max_r * (2.0 + (exp.frame as f32 / 60.0) * 1.2)) as i16;
+    let cap_width = max_r;
+
+    let flash_phase = exp.frame < 8;
+    let fireball_phase = exp.frame < 25;
+    let cooling_phase = exp.frame < 45;
+
+    let radius_i16 = exp.radius as i16;
+    let cap_height_f32 = cap_height as f32;
+    let frame_seed_component = global_frame + exp.frame as u64;
+
+    for dy in -cap_height..0 {
+        let py_signed = (y as i16) + dy;
+        if py_signed < 0 || py_signed >= (area.y + area.height) as i16 { continue; }
+        let py = py_signed as u16;
+
+        let dy_sq = dy * dy;
+        let dy_f32 = dy as f32;
+        let height_ratio = -dy_f32 / cap_height_f32;
+
+        let (base_width, height_mult, large_mult, fine_mult) = if height_ratio < 0.2 {
+            (0.5, 0.4, 0.0, 0.5)
+        } else if height_ratio < 0.5 {
+            (0.9, 1.5, 0.7, 0.3)
+        } else if height_ratio < 0.75 {
+            (1.4, 2.0, 1.2, 0.4)
+        } else {
+            (1.9, 2.5, 2.0, 0.8)
+        };
+
+        let height_component = if height_ratio < 0.2 {
+            height_ratio * height_mult
+        } else if height_ratio < 0.5 {
+            (height_ratio - 0.2) * height_mult
+        } else if height_ratio < 0.75 {
+            (height_ratio - 0.5) * height_mult
+        } else {
+            (height_ratio - 0.75) * height_mult
+        };
+
+        for dx in -(radius_i16)..=(radius_i16) {
+            let dist_sq = (dx * dx + dy_sq) as f32;
+            let dx_f32 = dx as f32;
+            let angle = dx_f32.atan2(dy_f32);
+            let large_turb_seed = hash2((angle * 1000.0) as u64, global_frame / 5);
+            let large_turbulence = ((large_turb_seed & 0xFF) as f32 / 255.0 - 0.5) * 0.6;
+            let fine_turb_seed = hash3(dx as u64, dy as u64, frame_seed_component);
+            let fine_turbulence = ((fine_turb_seed & 0xFF) as f32 / 255.0 - 0.5) * 0.4;
+
+            let height_factor = base_width + height_component +
+                               large_turbulence * large_mult +
+                               fine_turbulence * fine_mult;
+            let effective_width_sq = (cap_width * height_factor) * (cap_width * height_factor);
+
+            if dist_sq <= effective_width_sq {
+                let px_signed = (x as i16) + dx;
+                if px_signed < 0 || px_signed >= (area.x + area.width) as i16 { continue; }
+                let px = px_signed as u16;
+
+                let radial_dist = dist_sq.sqrt() / (cap_width * height_factor);
+                let vertical_factor = (-dy as f32) / cap_height as f32;
+                let dist_norm = (radial_dist * 0.5 + vertical_factor * 0.5).min(1.0);
+
+                let seed = hash3(px as u64, py as u64, global_frame + exp.frame as u64);
+                let flicker = ((seed & 0xFF) as f32) / 255.0;
+
+                let (r, g, b, ch) = if flash_phase {
+                    if dist_norm < 0.4 { (255, 255, 255, '█') }
+                    else if dist_norm < 0.7 { (255, 250, 220, '█') }
+                    else { (255, 240, 150, '▓') }
+                } else if fireball_phase {
+                    let phase_progress = (exp.frame - 8) as f32 / 17.0;
+                    let core_threshold = 0.3 - (phase_progress * 0.15);
+                    if dist_norm < core_threshold { (255, 255, 250, '█') }
+                    else if dist_norm < 0.4 {
+                        (255, (250.0 - phase_progress * 70.0) as u8, (120.0 - phase_progress * 100.0) as u8, '▓')
+                    } else if dist_norm < 0.6 {
+                        (255, (180.0 - phase_progress * 100.0) as u8, (20.0 * (1.0 - phase_progress)) as u8, '▓')
+                    } else if dist_norm < 0.8 { (255, 80, 0, '▒') }
+                    else { (200, 40, 0, '░') }
+                } else if cooling_phase {
+                    let cooling_progress = (exp.frame - 25) as f32 / 20.0;
+                    if dist_norm < 0.15 {
+                        let pulse = if (exp.frame / 3) % 2 == 0 { 60 } else { 20 };
+                        (255, pulse, 30, '☢')
+                    } else if dist_norm < 0.4 {
+                        ((220.0 - cooling_progress * 80.0 - flicker * 40.0) as u8, (60.0 - cooling_progress * 20.0) as u8, 0, '▓')
+                    } else if dist_norm < 0.7 {
+                        ((160.0 - cooling_progress * 50.0) as u8, (40.0 - cooling_progress * 20.0) as u8, 0, '▒')
+                    } else {
+                        ((100.0 - cooling_progress * 20.0) as u8, (20.0 - cooling_progress * 10.0) as u8, 0, '░')
+                    }
+                } else {
+                    let final_progress = (exp.frame - 45) as f32 / 15.0;
+                    let ch = if dist_norm > 0.5 { '░' } else { '▒' };
+                    ((80.0 - final_progress * 30.0) as u8, (15.0 - final_progress * 10.0) as u8, 0, ch)
+                };
+
+                buf[(px, py)].set_char(ch).set_fg(Color::Rgb(r, g, b));
+            }
+        }
+    }
+}
+
+/// Bio: low creeping fog — wide but stays low, neon green palette, irregular tendrils
+fn render_bio_explosion(exp: &ExplosionRender, x: u16, y: u16, area: Rect, global_frame: u64, buf: &mut Buffer) {
+    let progress = if exp.frame < 20 {
+        (exp.frame as f32 / 20.0).powf(0.5) // Faster initial spread
+    } else if exp.frame < 40 {
+        1.0 + ((exp.frame - 20) as f32 / 20.0) * 0.4
+    } else {
+        1.4
+    };
+    let max_r = exp.radius as f32 * progress;
+
+    // Low fog: 40% of nuke height, 1.8× width
+    let cap_height = (max_r * 0.4 * (1.5 + (exp.frame as f32 / 60.0) * 0.5)) as i16;
+    let cap_width = max_r * 1.8;
+
+    let flash_phase = exp.frame < 5;
+    let spread_phase = exp.frame < 20;
+    let creep_phase = exp.frame < 45;
+
+    let radius_i16 = (exp.radius as f32 * 1.8) as i16;
+    let cap_height_f32 = cap_height.max(1) as f32;
+    let frame_seed_component = global_frame + exp.frame as u64;
+
+    // Fog extends both slightly above AND below cursor (hugs ground)
+    let dy_min = -cap_height;
+    let dy_max = (cap_height / 3).max(2); // Small drip below
+
+    for dy in dy_min..=dy_max {
+        let py_signed = (y as i16) + dy;
+        if py_signed < 0 || py_signed >= (area.y + area.height) as i16 { continue; }
+        let py = py_signed as u16;
+
+        let dy_sq = dy * dy;
+        let dy_f32 = dy as f32;
+        let height_ratio = dy_f32.abs() / cap_height_f32;
+
+        for dx in -(radius_i16)..=(radius_i16) {
+            let dist_sq = (dx * dx + dy_sq) as f32;
+            let dx_f32 = dx as f32;
+            let angle = dx_f32.atan2(dy_f32);
+
+            // Higher fine turbulence for irregular tendrils
+            let large_turb_seed = hash2((angle * 800.0) as u64, global_frame / 4);
+            let large_turbulence = ((large_turb_seed & 0xFF) as f32 / 255.0 - 0.5) * 0.8;
+            let fine_turb_seed = hash3(dx as u64, dy as u64, frame_seed_component);
+            let fine_turbulence = ((fine_turb_seed & 0xFF) as f32 / 255.0 - 0.5) * 0.7; // High fine turbulence
+
+            // Width-dominant shape (wide, low)
+            let height_factor = 1.0 + large_turbulence * 0.6 + fine_turbulence * 0.5;
+            let effective_width_sq = (cap_width * height_factor) * (cap_width * height_factor);
+
+            // Vertical falloff: fog thins rapidly with height
+            let vert_falloff = 1.0 - (height_ratio * height_ratio);
+            let in_fog = dist_sq <= effective_width_sq * vert_falloff.max(0.0);
+
+            if in_fog {
+                let px_signed = (x as i16) + dx;
+                if px_signed < 0 || px_signed >= (area.x + area.width) as i16 { continue; }
+                let px = px_signed as u16;
+
+                let radial_dist = dist_sq.sqrt() / (cap_width * height_factor).max(1.0);
+                let dist_norm = (radial_dist * 0.6 + height_ratio * 0.4).min(1.0);
+
+                let seed = hash3(px as u64, py as u64, global_frame + exp.frame as u64);
+                let flicker = ((seed & 0xFF) as f32) / 255.0;
+
+                let (r, g, b, ch) = if flash_phase {
+                    if dist_norm < 0.4 { (200, 255, 200, '█') }
+                    else if dist_norm < 0.7 { (100, 255, 80, '█') }
+                    else { (50, 200, 40, '▓') }
+                } else if spread_phase {
+                    let p = (exp.frame - 5) as f32 / 15.0;
+                    if dist_norm < 0.3 { (0, 255, 50, '█') }
+                    else if dist_norm < 0.5 { ((40.0 * p) as u8, (255.0 - p * 55.0) as u8, (50.0 - p * 30.0) as u8, '▓') }
+                    else if dist_norm < 0.7 { (80, (200.0 - p * 60.0) as u8, 0, '▒') }
+                    else { (40, (120.0 - p * 40.0) as u8, 0, '░') }
+                } else if creep_phase {
+                    let p = (exp.frame - 20) as f32 / 25.0;
+                    if dist_norm < 0.15 {
+                        let pulse = if (exp.frame / 4) % 2 == 0 { 255 } else { 180 };
+                        (0, pulse, 30, '☣')
+                    } else if dist_norm < 0.4 {
+                        ((40.0 + flicker * 20.0) as u8, (180.0 - p * 60.0) as u8, (20.0 - p * 10.0) as u8, '▓')
+                    } else if dist_norm < 0.7 {
+                        ((50.0 - p * 15.0) as u8, (100.0 - p * 30.0) as u8, (10.0 - p * 5.0) as u8, '▒')
+                    } else {
+                        ((40.0 - p * 10.0) as u8, (60.0 - p * 20.0) as u8, (10.0 - p * 5.0) as u8, '░')
+                    }
+                } else {
+                    let p = (exp.frame - 45) as f32 / 15.0;
+                    let ch = if dist_norm > 0.5 { '░' } else { '▒' };
+                    ((30.0 - p * 15.0) as u8, (40.0 - p * 20.0) as u8, (20.0 - p * 10.0) as u8, ch)
+                };
+
+                buf[(px, py)].set_char(ch).set_fg(Color::Rgb(r, g, b));
+            }
+        }
+    }
+}
+
+/// EMP: expanding concentric rings — electric blue/cyan, fast, short duration
+fn render_emp_explosion(exp: &ExplosionRender, x: u16, y: u16, area: Rect, global_frame: u64, buf: &mut Buffer) {
+    // 3 rings expanding at staggered speeds, fills radius by frame 15
+    let progress = (exp.frame as f32 / 15.0).min(1.0); // Full expansion by frame 15
+    let fade = if exp.frame > 15 { (exp.frame - 15) as f32 / 15.0 } else { 0.0 };
+
+    let max_r = exp.radius as f32 * progress;
+
+    // 3 ring radii at different expansion speeds
+    let ring_radii = [
+        max_r * 1.0,            // Outer ring (fastest)
+        max_r * 0.65,           // Middle ring
+        max_r * 0.35,           // Inner ring
+    ];
+    let ring_thickness = 2.0_f32; // ~2 chars thick
+
+    // Scan area covers full circle (above AND below cursor)
+    let scan_r = (max_r as i16) + 3;
+
+    for dy in -scan_r..=scan_r {
+        let py_signed = (y as i16) + dy;
+        if py_signed < 0 || py_signed >= (area.y + area.height) as i16 { continue; }
+        let py = py_signed as u16;
+
+        for dx in -scan_r..=scan_r {
+            let px_signed = (x as i16) + dx;
+            if px_signed < 0 || px_signed >= (area.x + area.width) as i16 { continue; }
+            let px = px_signed as u16;
+
+            let dist = ((dx * dx + dy * dy) as f32).sqrt();
+
+            // Check if this pixel is near any ring
+            let mut best_ring: Option<(f32, usize)> = None; // (proximity to ring, ring_index)
+            for (i, &ring_r) in ring_radii.iter().enumerate() {
+                if ring_r < 1.0 { continue; }
+                let proximity = (dist - ring_r).abs();
+                if proximity <= ring_thickness {
+                    if best_ring.is_none() || proximity < best_ring.unwrap().0 {
+                        best_ring = Some((proximity, i));
+                    }
+                }
+            }
+
+            // Also add flickering arc sparks between rings
+            let spark_seed = hash3(dx as u64, dy as u64, global_frame + exp.frame as u64);
+            let is_spark = (spark_seed & 0x1F) == 0 && dist < max_r && dist > ring_radii[2] * 0.5;
+
+            if let Some((proximity, ring_idx)) = best_ring {
+                let ring_fade = proximity / ring_thickness; // 0 at center, 1 at edge
+                let age_fade = 1.0 - fade;
+
+                // Rapid pulse/flicker (frame-by-frame jitter)
+                let jitter = ((spark_seed & 0x3) as f32) / 3.0;
+                let brightness = ((1.0 - ring_fade) * age_fade * (0.7 + jitter * 0.3)).min(1.0);
+
+                if brightness < 0.05 { continue; }
+
+                // Color: inner rings brighter cyan, outer rings deeper blue
+                let (r, g, b, ch) = match ring_idx {
+                    0 => { // Outer ring — deep blue fading
+                        let b_val = (200.0 * brightness) as u8;
+                        (0, (80.0 * brightness) as u8, b_val, if brightness > 0.5 { '▓' } else { '░' })
+                    }
+                    1 => { // Middle ring — electric cyan
+                        ((50.0 * brightness) as u8, (200.0 * brightness) as u8, (255.0 * brightness) as u8,
+                         if brightness > 0.6 { '█' } else { '▒' })
+                    }
+                    _ => { // Inner ring — blinding white-cyan
+                        let w = (brightness * 255.0) as u8;
+                        (w, w, (255.0 * brightness) as u8, '█')
+                    }
+                };
+
+                buf[(px, py)].set_char(ch).set_fg(Color::Rgb(r, g, b));
+            } else if is_spark && fade < 0.5 {
+                // Arc sparks between rings
+                buf[(px, py)].set_char('·').set_fg(Color::Rgb(0, 255, 255));
+            }
+        }
+    }
+}
+
+/// Chem: dense dome/sphere expanding in ALL directions — purple palette, dripping
+fn render_chem_explosion(exp: &ExplosionRender, x: u16, y: u16, area: Rect, global_frame: u64, buf: &mut Buffer) {
+    let progress = if exp.frame < 20 {
+        (exp.frame as f32 / 20.0).powf(0.6)
+    } else if exp.frame < 40 {
+        1.0 + ((exp.frame - 20) as f32 / 20.0) * 0.3
+    } else {
+        1.3
+    };
+    let max_r = exp.radius as f32 * progress;
+
+    // Spherical: equal radius in all directions (above AND below)
+    let sphere_r = (max_r * 1.5) as i16;
+    let sphere_r_f32 = sphere_r as f32;
+
+    let flash_phase = exp.frame < 6;
+    let fireball_phase = exp.frame < 22;
+    let cooling_phase = exp.frame < 45;
+
+    let radius_i16 = (exp.radius as f32 * 1.5) as i16;
+    let frame_seed_component = global_frame + exp.frame as u64;
+
+    // Drip zone: extra chars trailing below the sphere
+    let drip_extra = (max_r * 0.3) as i16;
+
+    for dy in -sphere_r..=(sphere_r + drip_extra) {
+        let py_signed = (y as i16) + dy;
+        if py_signed < 0 || py_signed >= (area.y + area.height) as i16 { continue; }
+        let py = py_signed as u16;
+
+        let dy_sq = dy * dy;
+        let is_drip_zone = dy > sphere_r;
+
+        for dx in -(radius_i16)..=(radius_i16) {
+            let dist_sq = (dx * dx + dy_sq) as f32;
+            let dist = dist_sq.sqrt();
+
+            // Dense sphere check (less turbulence = more solid fill)
+            let turb_seed = hash3(dx as u64, dy as u64, frame_seed_component);
+            let turbulence = ((turb_seed & 0xFF) as f32 / 255.0 - 0.5) * 0.25; // Low turbulence
+
+            let effective_r = sphere_r_f32 * (1.0 + turbulence);
+
+            let in_sphere = if is_drip_zone {
+                // Drip effect: narrow vertical trails below sphere
+                let drip_seed = hash2(dx as u64, global_frame / 3);
+                let drip_chance = (drip_seed & 0x7) < 2; // ~25% of columns drip
+                let drip_progress = (dy - sphere_r) as f32 / drip_extra as f32;
+                drip_chance && dx.abs() < radius_i16 / 2 && drip_progress < (1.0 - (dx.abs() as f32 / radius_i16 as f32))
+            } else {
+                dist <= effective_r
+            };
+
+            if in_sphere {
+                let px_signed = (x as i16) + dx;
+                if px_signed < 0 || px_signed >= (area.x + area.width) as i16 { continue; }
+                let px = px_signed as u16;
+
+                let dist_norm = if is_drip_zone {
+                    0.8 + 0.2 * ((dy - sphere_r) as f32 / drip_extra.max(1) as f32)
+                } else {
+                    (dist / effective_r).min(1.0)
+                };
+
+                let seed = hash3(px as u64, py as u64, global_frame + exp.frame as u64);
+                let flicker = ((seed & 0xFF) as f32) / 255.0;
+
+                let (r, g, b, ch) = if is_drip_zone {
+                    // Dripping trails
+                    ((60.0 + flicker * 20.0) as u8, 0, (80.0 + flicker * 20.0) as u8, '░')
+                } else if flash_phase {
+                    if dist_norm < 0.4 { (240, 200, 255, '█') }
+                    else if dist_norm < 0.7 { (200, 100, 255, '█') }
+                    else { (160, 60, 200, '▓') }
+                } else if fireball_phase {
+                    let p = (exp.frame - 6) as f32 / 16.0;
+                    if dist_norm < 0.3 { (200, (50.0 * (1.0 - p)) as u8, 200, '█') }
+                    else if dist_norm < 0.5 { ((150.0 + p * 20.0) as u8, 0, (200.0 - p * 40.0) as u8, '▓') }
+                    else if dist_norm < 0.7 { ((120.0 - p * 30.0) as u8, 0, (160.0 - p * 40.0) as u8, '▒') }
+                    else { ((80.0 - p * 20.0) as u8, 0, (120.0 - p * 30.0) as u8, '░') }
+                } else if cooling_phase {
+                    let p = (exp.frame - 22) as f32 / 23.0;
+                    if dist_norm < 0.15 {
+                        let pulse = if (exp.frame / 3) % 2 == 0 { 200 } else { 120 };
+                        (pulse, 0, (200.0 - p * 40.0) as u8, '☠')
+                    } else if dist_norm < 0.4 {
+                        ((80.0 + flicker * 30.0 - p * 20.0) as u8, 0, (120.0 - p * 30.0) as u8, '▓')
+                    } else if dist_norm < 0.7 {
+                        ((60.0 - p * 15.0) as u8, 0, (80.0 - p * 20.0) as u8, '▒')
+                    } else {
+                        ((40.0 - p * 10.0) as u8, (10.0 * (1.0 - p)) as u8, (60.0 - p * 20.0) as u8, '░')
+                    }
+                } else {
+                    let p = (exp.frame - 45) as f32 / 15.0;
+                    let ch = if dist_norm > 0.5 { '░' } else { '▒' };
+                    ((40.0 - p * 20.0) as u8, (20.0 - p * 10.0) as u8, (50.0 - p * 25.0) as u8, ch)
+                };
+
+                buf[(px, py)].set_char(ch).set_fg(Color::Rgb(r, g, b));
             }
         }
     }
@@ -634,16 +882,18 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         ),
         Span::styled("| ", Style::default().fg(Color::DarkGray)),
         Span::styled(app.center_coords(), Style::default().fg(Color::Cyan)),
+        Span::styled("| ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            format!("{} {}", app.active_weapon.symbol(), app.active_weapon.label()),
+            Style::default().fg(weapon_color(app.active_weapon)),
+        ),
         if app.casualties > 0 {
             Span::styled(
                 format!(" | CASUALTIES: {}", format_casualties(app.casualties)),
                 Style::default().fg(Color::Red),
             )
         } else {
-            Span::styled(
-                " | SPACE to nuke",
-                Style::default().fg(Color::DarkGray),
-            )
+            Span::raw("")
         },
     ]);
 
