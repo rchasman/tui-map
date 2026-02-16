@@ -408,7 +408,7 @@ impl App {
                 if let Projection::Globe(ref mut g) = self.projection {
                     g.apply_momentum(self.spin_velocity, 0.0);
                 }
-                self.spin_velocity *= 0.95;
+                self.spin_velocity *= 0.995;
             }
         }
 
