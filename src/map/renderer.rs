@@ -934,43 +934,93 @@ impl MapRenderer {
         }
     }
 
-    /// Draw a linestring on the globe with great circle subdivision
+    /// Draw a linestring on the globe with great circle subdivision.
+    /// Hot path: slerp produces Vec3 directly, projects via 3 dot products.
+    /// No lon/lat roundtrip — saves 6 trig ops per subdivision point.
     fn draw_linestring_globe(&self, canvas: &mut BrailleCanvas, line: &LineString, globe: &GlobeViewport) {
         if line.len() < 2 {
             return;
         }
 
+        // Back-face bbox check: if all 4 corners are behind the globe, skip entirely
+        let (min_lon, min_lat, max_lon, max_lat) = line.bbox;
+        let corners = [
+            globe::lonlat_to_vec3(min_lon, min_lat),
+            globe::lonlat_to_vec3(max_lon, min_lat),
+            globe::lonlat_to_vec3(min_lon, max_lat),
+            globe::lonlat_to_vec3(max_lon, max_lat),
+        ];
+        let any_front = corners.iter().any(|c| c.dot(globe.forward_vec()) > -0.3);
+        if !any_front {
+            return;
+        }
+
+        let half_w = globe.width as i32 / 2;
         let mut prev_screen: Option<(i32, i32)> = None;
+        let mut prev_vec: Option<globe::DVec3> = None;
 
-        for window in line.points.windows(2) {
-            let (lon0, lat0) = window[0];
-            let (lon1, lat1) = window[1];
+        for &(lon, lat) in &line.points {
+            let cur = globe::lonlat_to_vec3(lon, lat);
 
-            // Project the start of the segment (only for the very first point)
-            if prev_screen.is_none() {
-                prev_screen = globe.project(lon0, lat0);
-            }
+            if let Some(pv) = prev_vec {
+                // Slerp inline: compute angular distance between prev and cur
+                let dot = pv.dot(cur).clamp(-1.0, 1.0);
+                let angle = dot.acos();
 
-            // Walk the great circle arc, projecting each interpolated point
-            globe::walk_great_circle(lon0, lat0, lon1, lat1, |lon, lat| {
-                match globe.project(lon, lat) {
-                    Some((px, py)) => {
-                        if let Some((prev_x, prev_y)) = prev_screen {
-                            let dist = (px - prev_x).abs() + (py - prev_y).abs();
-                            if dist < globe.width as i32 / 2
-                                && globe.line_might_be_visible((prev_x, prev_y), (px, py))
-                            {
-                                draw_line(canvas, prev_x, prev_y, px, py);
+                // Adaptive subdivision: ~2° segments, but skip for tiny arcs
+                let steps = ((angle.to_degrees() / 2.0).ceil() as usize).max(1);
+
+                if steps <= 1 {
+                    // Short segment — project endpoint directly
+                    match globe.project_vec3(cur) {
+                        Some((px, py)) => {
+                            if let Some((prev_x, prev_y)) = prev_screen {
+                                let dist = (px - prev_x).abs() + (py - prev_y).abs();
+                                if dist < half_w && globe.line_might_be_visible((prev_x, prev_y), (px, py)) {
+                                    draw_line(canvas, prev_x, prev_y, px, py);
+                                }
+                            }
+                            prev_screen = Some((px, py));
+                        }
+                        None => prev_screen = None,
+                    }
+                } else {
+                    // Slerp subdivision — all Vec3, no lon/lat
+                    let sin_angle = angle.sin();
+                    if sin_angle.abs() < 1e-10 {
+                        // Nearly identical/antipodal — just project endpoint
+                        match globe.project_vec3(cur) {
+                            Some(p) => prev_screen = Some(p),
+                            None => prev_screen = None,
+                        }
+                    } else {
+                        for i in 1..=steps {
+                            let t = i as f64 / steps as f64;
+                            let sa = ((1.0 - t) * angle).sin() / sin_angle;
+                            let sb = (t * angle).sin() / sin_angle;
+                            let p = pv * sa + cur * sb;
+
+                            match globe.project_vec3(p) {
+                                Some((px, py)) => {
+                                    if let Some((prev_x, prev_y)) = prev_screen {
+                                        let dist = (px - prev_x).abs() + (py - prev_y).abs();
+                                        if dist < half_w && globe.line_might_be_visible((prev_x, prev_y), (px, py)) {
+                                            draw_line(canvas, prev_x, prev_y, px, py);
+                                        }
+                                    }
+                                    prev_screen = Some((px, py));
+                                }
+                                None => prev_screen = None,
                             }
                         }
-                        prev_screen = Some((px, py));
-                    }
-                    None => {
-                        // Back-face: break the line
-                        prev_screen = None;
                     }
                 }
-            });
+            } else {
+                // First point — just project
+                prev_screen = globe.project_vec3(cur);
+            }
+
+            prev_vec = Some(cur);
         }
     }
 

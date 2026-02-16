@@ -1,4 +1,4 @@
-use glam::DVec3;
+pub use glam::DVec3;
 use std::f64::consts::PI;
 
 use crate::map::projection::Viewport;
@@ -87,6 +87,21 @@ impl GlobeViewport {
         let px = (self.width as f64 / 2.0 + sx * self.radius) as i32;
         let py = (self.height as f64 / 2.0 - sy * self.radius) as i32;
 
+        Some((px, py))
+    }
+
+    /// Project a unit-sphere Vec3 directly to screen pixels.
+    /// Skips the lon/lat → Vec3 conversion — use in tight loops.
+    #[inline(always)]
+    pub fn project_vec3(&self, p: DVec3) -> Option<(i32, i32)> {
+        let depth = p.dot(self.forward);
+        if depth < 0.0 {
+            return None;
+        }
+        let sx = p.dot(self.right);
+        let sy = p.dot(self.up);
+        let px = (self.width as f64 / 2.0 + sx * self.radius) as i32;
+        let py = (self.height as f64 / 2.0 - sy * self.radius) as i32;
         Some((px, py))
     }
 
@@ -295,6 +310,12 @@ impl GlobeViewport {
         self.center_lonlat().1
     }
 
+    /// Access forward vector for back-face culling.
+    #[inline(always)]
+    pub fn forward_vec(&self) -> DVec3 {
+        self.forward
+    }
+
     /// Check if a projected point is within the viewport.
     pub fn is_visible(&self, px: i32, py: i32) -> bool {
         px >= -10
@@ -319,7 +340,7 @@ impl GlobeViewport {
 
 /// Convert lon/lat (degrees) to a unit sphere vector.
 #[inline(always)]
-fn lonlat_to_vec3(lon: f64, lat: f64) -> DVec3 {
+pub fn lonlat_to_vec3(lon: f64, lat: f64) -> DVec3 {
     let lon_rad = lon.to_radians();
     let lat_rad = lat.to_radians();
     DVec3::new(
@@ -329,45 +350,3 @@ fn lonlat_to_vec3(lon: f64, lat: f64) -> DVec3 {
     )
 }
 
-/// Interpolate along a great circle arc and call a visitor for each subdivision point.
-/// Subdivides adaptively: ~2° segments for smooth curves at braille resolution.
-/// No allocation — projects each point inline and passes to visitor.
-#[inline]
-pub fn walk_great_circle(
-    lon0: f64, lat0: f64,
-    lon1: f64, lat1: f64,
-    mut visitor: impl FnMut(f64, f64),
-) {
-    let a = lonlat_to_vec3(lon0, lat0);
-    let b = lonlat_to_vec3(lon1, lat1);
-
-    let dot = a.dot(b).clamp(-1.0, 1.0);
-    let angle = dot.acos(); // angular distance in radians
-
-    // ~2° segments
-    let steps = ((angle.to_degrees() / 2.0).ceil() as usize).max(1);
-
-    if steps == 1 {
-        // Short segment, just emit endpoint
-        visitor(lon1, lat1);
-        return;
-    }
-
-    let sin_angle = angle.sin();
-    if sin_angle.abs() < 1e-10 {
-        // Points are nearly identical or antipodal
-        visitor(lon1, lat1);
-        return;
-    }
-
-    for i in 1..=steps {
-        let t = i as f64 / steps as f64;
-        let sa = ((1.0 - t) * angle).sin() / sin_angle;
-        let sb = (t * angle).sin() / sin_angle;
-        let p = a * sa + b * sb;
-
-        let lat = p.z.clamp(-1.0, 1.0).asin().to_degrees();
-        let lon = p.y.atan2(p.x).to_degrees();
-        visitor(lon, lat);
-    }
-}
