@@ -223,29 +223,39 @@ impl GlobeViewport {
         }
     }
 
-    /// Conservative lat/lon bounding box of the visible hemisphere.
-    /// Used for spatial index queries. Samples points around the visible disk edge.
+    /// Conservative lat/lon bounding box of what's actually visible on screen.
+    /// At low zoom (sphere fits in viewport): hemisphere bounds.
+    /// At high zoom (sphere overflows viewport): unproject viewport edges for tight bounds.
     pub fn visible_bounds(&self) -> (f64, f64, f64, f64) {
-        // Latitude: analytical from edge z-range.
-        // Edge of visible disk: p = right*cos(θ) + up*sin(θ), so
-        // p.z = right.z*cos(θ) + up.z*sin(θ), range = ±sqrt(right.z² + up.z²)
+        // Use viewport-clipped bounds only when the sphere radius exceeds the
+        // viewport's half-diagonal — guarantees ALL corners unproject onto the sphere.
+        // Below that, corners fall outside the disk and give a thin sliver of bounds.
+        let half_diag = ((self.width * self.width + self.height * self.height) as f64 / 4.0).sqrt();
+
+        if self.radius > half_diag {
+            self.viewport_clipped_bounds()
+        } else {
+            self.hemisphere_bounds()
+        }
+    }
+
+    /// Hemisphere bounds: analytical lat, 8-sample lon. Used when sphere fits in viewport.
+    fn hemisphere_bounds(&self) -> (f64, f64, f64, f64) {
         let edge_z = (self.right.z * self.right.z + self.up.z * self.up.z).sqrt();
         let min_lat = (-edge_z).max(-1.0).asin().to_degrees();
         let max_lat = edge_z.min(1.0).asin().to_degrees();
 
-        // Longitude: sample 8 cardinal/ordinal directions on the disk edge.
-        // No sin/cos calls — just ±right, ±up, ±(right±up)/√2.
         const INV_SQRT2: f64 = std::f64::consts::FRAC_1_SQRT_2;
         let samples: [DVec3; 9] = [
-            self.forward,                                          // center
-            self.right,                                            // 0°
-            self.right * INV_SQRT2 + self.up * INV_SQRT2,         // 45°
-            self.up,                                               // 90°
-            self.right * (-INV_SQRT2) + self.up * INV_SQRT2,      // 135°
-            -self.right,                                           // 180°
-            self.right * (-INV_SQRT2) + self.up * (-INV_SQRT2),   // 225°
-            -self.up,                                              // 270°
-            self.right * INV_SQRT2 + self.up * (-INV_SQRT2),      // 315°
+            self.forward,
+            self.right,
+            self.right * INV_SQRT2 + self.up * INV_SQRT2,
+            self.up,
+            self.right * (-INV_SQRT2) + self.up * INV_SQRT2,
+            -self.right,
+            self.right * (-INV_SQRT2) + self.up * (-INV_SQRT2),
+            -self.up,
+            self.right * INV_SQRT2 + self.up * (-INV_SQRT2),
         ];
 
         let mut min_lon = f64::MAX;
@@ -256,19 +266,64 @@ impl GlobeViewport {
             max_lon = max_lon.max(lon);
         }
 
-        // If the visible hemisphere spans > 180° longitude, it wraps
         if max_lon - min_lon > 180.0 {
             min_lon = -180.0;
             max_lon = 180.0;
         }
 
-        // Pole visibility: if forward.z magnitude > cos(edge angular radius),
-        // the pole is within the visible hemisphere
         let center_lat = self.forward.z.clamp(-1.0, 1.0).asin().to_degrees();
         let min_lat = if self.forward.z < 0.0 && center_lat - 90.0 < -89.0 { -90.0 } else { min_lat };
         let max_lat = if self.forward.z > 0.0 && center_lat + 90.0 > 89.0 { 90.0 } else { max_lat };
 
         (min_lon.max(-180.0), min_lat.max(-90.0), max_lon.min(180.0), max_lat.min(90.0))
+    }
+
+    /// Tight bounds by unprojecting viewport edge samples. Used when zoomed in.
+    fn viewport_clipped_bounds(&self) -> (f64, f64, f64, f64) {
+        let w = self.width as i32;
+        let h = self.height as i32;
+
+        // Sample 4 corners + 4 edge midpoints + center = 9 points
+        let probes: [(i32, i32); 9] = [
+            (0, 0), (w, 0), (0, h), (w, h),               // corners
+            (w / 2, 0), (w / 2, h), (0, h / 2), (w, h / 2), // edge midpoints
+            (w / 2, h / 2),                                  // center
+        ];
+
+        let mut min_lon = f64::MAX;
+        let mut max_lon = f64::MIN;
+        let mut min_lat = f64::MAX;
+        let mut max_lat = f64::MIN;
+        let mut hit = false;
+
+        for &(px, py) in &probes {
+            if let Some((lon, lat)) = self.unproject(px, py) {
+                min_lon = min_lon.min(lon);
+                max_lon = max_lon.max(lon);
+                min_lat = min_lat.min(lat);
+                max_lat = max_lat.max(lat);
+                hit = true;
+            }
+        }
+
+        if !hit {
+            return self.hemisphere_bounds();
+        }
+
+        // Pad conservatively — unproject only samples discrete points,
+        // the actual curve between them may extend slightly further
+        let pad = 5.0 / self.effective_zoom();
+        min_lon = (min_lon - pad).max(-180.0);
+        max_lon = (max_lon + pad).min(180.0);
+        min_lat = (min_lat - pad).max(-90.0);
+        max_lat = (max_lat + pad).min(90.0);
+
+        if max_lon - min_lon > 180.0 {
+            min_lon = -180.0;
+            max_lon = 180.0;
+        }
+
+        (min_lon, min_lat, max_lon, max_lat)
     }
 
     /// Effective zoom level normalized to match Mercator's zoom=1 at world view.
