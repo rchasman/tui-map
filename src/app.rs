@@ -100,9 +100,13 @@ impl FireGrid {
             let lon_idx = (normalize_lon(fire.lon) / self.resolution) as usize;
             let lat_idx = (normalize_lat(fire.lat) / self.resolution) as usize;
             let idx = lat_idx * self.width + lon_idx;
-            if idx < self.cells.len() && fire.intensity > self.cells[idx] {
-                self.cells[idx] = fire.intensity;
-                self.weapons[idx] = fire.weapon_type;
+            if idx < self.cells.len() {
+                // Saturating add: overlapping fires from multiple blasts compound
+                let combined = (self.cells[idx] as u16).saturating_add(fire.intensity as u16).min(255) as u8;
+                if combined > self.cells[idx] {
+                    self.weapons[idx] = fire.weapon_type;
+                }
+                self.cells[idx] = combined;
             }
         }
     }
@@ -586,7 +590,7 @@ impl App {
 
     /// Flipped join: for each city, probe fire grid neighborhood to check if burning.
     /// O(cities × 9) with flat array lookups vs old O(fires) with HashMap queries.
-    /// Scales damage by number of burning cells to match old per-fire behavior.
+    /// Damage scales by fire intensity (not just presence) for distance-aware decay.
     fn apply_fire_damage_to_cities(&mut self) {
         let rate = 0.01;
         let res = self.fire_grid_fine.resolution;
@@ -594,7 +598,7 @@ impl App {
         let height = self.fire_grid_fine.height;
 
         for idx in 0..self.map_renderer.city_grid.len() {
-            let (lon, lat, pop) = {
+            let (pop, orig_pop) = {
                 let city = match self.map_renderer.city_grid.get(idx) {
                     Some(c) => c,
                     None => continue,
@@ -602,30 +606,38 @@ impl App {
                 if city.population == 0 {
                     continue;
                 }
-                (city.lon, city.lat, city.population)
+                (city.population, city.original_population)
             };
 
-            // Probe 3×3 neighborhood around city — 9 flat array lookups
-            let cx = (normalize_lon(lon) / res) as i32;
-            let cy = (normalize_lat(lat) / res) as i32;
+            // Probe 3×3 neighborhood — weight by intensity instead of binary count
+            let cx = (normalize_lon(self.map_renderer.city_grid.get(idx).unwrap().lon) / res) as i32;
+            let cy = (normalize_lat(self.map_renderer.city_grid.get(idx).unwrap().lat) / res) as i32;
 
-            let mut fire_cells = 0u32;
+            let mut intensity_sum = 0.0f64;
             for dy in -1i32..=1 {
                 for dx in -1i32..=1 {
                     let nx = (cx + dx).clamp(0, width as i32 - 1) as usize;
                     let ny = (cy + dy).clamp(0, height as i32 - 1) as usize;
-                    if self.fire_grid_fine.cells[ny * width + nx] > 50 {
-                        fire_cells += 1;
+                    let cell_intensity = self.fire_grid_fine.cells[ny * width + nx];
+                    if cell_intensity > 50 {
+                        // Normalize intensity to 0..1, center cell weighted more
+                        let weight = if dx == 0 && dy == 0 { 2.0 } else { 1.0 };
+                        intensity_sum += (cell_intensity as f64 / 255.0) * weight;
                     }
                 }
             }
 
-            if fire_cells > 0 {
-                // Scale damage by burning cells: matches old per-fire compounding
-                let damage = ((pop as f64 * rate * fire_cells as f64) as u64).max(1);
+            if intensity_sum > 0.0 {
+                let damage = (pop as f64 * rate * intensity_sum) as u64;
                 if let Some(city) = self.map_renderer.city_grid.get_mut(idx) {
-                    city.population = city.population.saturating_sub(damage);
-                    self.casualties += damage;
+                    if damage == 0 && city.population < orig_pop / 20 {
+                        // Collapse: infrastructure fails below 5% of original
+                        self.casualties += city.population;
+                        city.population = 0;
+                    } else {
+                        city.population = city.population.saturating_sub(damage);
+                        self.casualties += damage;
+                    }
                 }
             }
         }
@@ -645,7 +657,8 @@ impl App {
         matches!(self.projection, Projection::Globe(_))
     }
 
-    /// Apply ongoing damage (fire/fallout) - small percentage casualties
+    /// Apply ongoing fallout damage with inverse-square distance falloff.
+    /// Cities near ground zero take full rate, cities at edge take near-zero.
     fn apply_ongoing_damage(&mut self, lon: f64, lat: f64, radius_km: f64, rate: f64) {
         // Query radius needs to include city sizes too
         let query_radius_degrees = (radius_km + 50.0) / 111.0;
@@ -661,11 +674,21 @@ impl App {
 
                 let dist = fast_distance_km(lon, lat, city.lon, city.lat);
 
-                // Fire/fallout affects city if circles overlap
+                // Fallout affects city if circles overlap
                 if dist < radius_km + city.radius_km {
-                    let damage = ((city.population as f64 * rate) as u64).max(1);
-                    city.population = city.population.saturating_sub(damage);
-                    self.casualties += damage;
+                    // Distance falloff: full rate at center, drops with square of distance
+                    let normalized = (dist / radius_km).min(1.0);
+                    let falloff = (1.0 - normalized * normalized).max(0.0);
+                    let damage = (city.population as f64 * rate * falloff) as u64;
+
+                    if damage == 0 && city.population < city.original_population / 20 {
+                        // Collapse: infrastructure fails below 5% of original
+                        self.casualties += city.population;
+                        city.population = 0;
+                    } else {
+                        city.population = city.population.saturating_sub(damage);
+                        self.casualties += damage;
+                    }
                 }
             }
         }
