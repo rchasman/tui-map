@@ -101,12 +101,10 @@ impl FireGrid {
             let lat_idx = (normalize_lat(fire.lat) / self.resolution) as usize;
             let idx = lat_idx * self.width + lon_idx;
             if idx < self.cells.len() {
-                // Saturating add: overlapping fires from multiple blasts compound
-                let combined = (self.cells[idx] as u16).saturating_add(fire.intensity as u16).min(255) as u8;
-                if combined > self.cells[idx] {
+                if fire.intensity > self.cells[idx] {
+                    self.cells[idx] = fire.intensity;
                     self.weapons[idx] = fire.weapon_type;
                 }
-                self.cells[idx] = combined;
             }
         }
     }
@@ -386,8 +384,8 @@ impl App {
                     }
 
                     let center_factor = 1.0 - (dist / radius_km);
-                    let base_intensity = 200.0 + center_factor * 55.0;
-                    let intensity = (base_intensity + rand_simple((attempt as u64).wrapping_add(1000)) * 30.0).min(255.0) as u8;
+                    let base_intensity = 60.0 + center_factor * 160.0;
+                    let intensity = (base_intensity + rand_simple((attempt as u64).wrapping_add(1000)) * 20.0).min(255.0) as u8;
 
                     self.fires.push(Fire {
                         lon: fire_lon,
