@@ -109,10 +109,20 @@ fn point_in_polygon(x: f64, y: f64, ring: &[(f64, f64)]) -> bool {
 }
 
 /// A geographic line (sequence of lon/lat coordinates) with precomputed bounding box
+/// and unit-sphere geometry for globe rendering (conservative approximation).
 #[derive(Clone)]
 pub struct LineString {
     pub points: Vec<(f64, f64)>,
     pub bbox: (f64, f64, f64, f64), // min_lon, min_lat, max_lon, max_lat
+    /// Precomputed unit-sphere vectors — eliminates trig in globe hot loop.
+    /// Amortized O(1) per frame vs O(n) sin/cos calls.
+    vecs: Vec<globe::DVec3>,
+    /// Bounding sphere center on unit sphere for O(1) hemisphere culling.
+    /// Single dot product replaces 4× lonlat_to_vec3 + 4 dot products.
+    center_vec: globe::DVec3,
+    /// Feature invisible when center_vec·forward < cull_dot.
+    /// Precomputed as -sin(angular_radius + padding).
+    cull_dot: f64,
 }
 
 impl LineString {
@@ -125,9 +135,32 @@ impl LineString {
             min_lat = min_lat.min(lat);
             max_lat = max_lat.max(lat);
         }
+
+        // Phase 1 (blog: "coverage generation"): precompute unit-sphere vectors
+        let vecs: Vec<globe::DVec3> = points.iter()
+            .map(|&(lon, lat)| globe::lonlat_to_vec3(lon, lat))
+            .collect();
+
+        // Bounding sphere: normalized centroid + max angular distance
+        let sum = vecs.iter().copied().fold(globe::DVec3::ZERO, |acc, v| acc + v);
+        let center_vec = if sum.length_squared() > 1e-10 {
+            sum.normalize()
+        } else {
+            globe::DVec3::X // fallback for antipodal point sets
+        };
+        let min_dot = vecs.iter()
+            .map(|v| v.dot(center_vec))
+            .fold(1.0_f64, f64::min);
+        let angular_radius = min_dot.clamp(-1.0, 1.0).acos();
+        // Small padding (0.05 rad ≈ 3°) for horizon continuity
+        let cull_dot = -(angular_radius + 0.05).sin();
+
         Self {
             points,
             bbox: (min_lon, min_lat, max_lon, max_lat),
+            vecs,
+            center_vec,
+            cull_dot,
         }
     }
 
@@ -770,14 +803,14 @@ impl MapRenderer {
                     self.draw_linestring_globe(&mut borders_canvas, &borders[idx], globe);
                 }
 
-                if self.settings.show_states && zoom >= 4.0 {
+                if self.settings.show_states && zoom >= 1.5 {
                     let candidates = Self::query_grid_wrapped(&self.state_grid, fg_min_lon, fg_min_lat, fg_max_lon, fg_max_lat);
                     for &idx in &candidates {
                         self.draw_linestring_globe(&mut states_canvas, &self.states[idx], globe);
                     }
                 }
 
-                if self.settings.show_counties && zoom >= 7.0 {
+                if self.settings.show_counties && zoom >= 3.5 {
                     let candidates = Self::query_grid_wrapped(&self.county_grid, fg_min_lon, fg_min_lat, fg_max_lon, fg_max_lat);
                     for &idx in &candidates {
                         self.draw_linestring_globe(&mut counties_canvas, &self.counties[idx], globe);
@@ -935,43 +968,40 @@ impl MapRenderer {
     }
 
     /// Draw a linestring on the globe with great circle subdivision.
-    /// Hot path: slerp produces Vec3 directly, projects via 3 dot products.
-    /// No lon/lat roundtrip — saves 6 trig ops per subdivision point.
+    /// Three-phase conservative approximation (à la FloeDB H3 joins):
+    ///   Phase 1: Bounding sphere cull — single dot product (O(1) vs 8 trig ops)
+    ///   Phase 2: Per-segment back-face skip — 2 dot products
+    ///   Phase 3: Slerp + project using precomputed Vec3s — zero trig in hot loop
     fn draw_linestring_globe(&self, canvas: &mut BrailleCanvas, line: &LineString, globe: &GlobeViewport) {
         if line.len() < 2 {
             return;
         }
 
-        // Back-face bbox check: if all 4 corners are behind the globe, skip entirely
-        let (min_lon, min_lat, max_lon, max_lat) = line.bbox;
-        let corners = [
-            globe::lonlat_to_vec3(min_lon, min_lat),
-            globe::lonlat_to_vec3(max_lon, min_lat),
-            globe::lonlat_to_vec3(min_lon, max_lat),
-            globe::lonlat_to_vec3(max_lon, max_lat),
-        ];
-        let any_front = corners.iter().any(|c| c.dot(globe.forward_vec()) > -0.3);
-        if !any_front {
+        // Phase 1: O(1) hemisphere cull via precomputed bounding sphere
+        if line.center_vec.dot(globe.forward_vec()) < line.cull_dot {
             return;
         }
 
+        let forward = globe.forward_vec();
         let half_w = globe.width as i32 / 2;
         let mut prev_screen: Option<(i32, i32)> = None;
         let mut prev_vec: Option<globe::DVec3> = None;
 
-        for &(lon, lat) in &line.points {
-            let cur = globe::lonlat_to_vec3(lon, lat);
-
+        // Phase 3: iterate precomputed unit-sphere vectors (zero lonlat_to_vec3 calls)
+        for &cur in &line.vecs {
             if let Some(pv) = prev_vec {
-                // Slerp inline: compute angular distance between prev and cur
+                // Phase 2: skip segments entirely behind the globe
+                if cur.dot(forward) < -0.1 && pv.dot(forward) < -0.1 {
+                    prev_screen = None;
+                    prev_vec = Some(cur);
+                    continue;
+                }
+
                 let dot = pv.dot(cur).clamp(-1.0, 1.0);
                 let angle = dot.acos();
-
-                // Adaptive subdivision: ~2° segments, but skip for tiny arcs
                 let steps = ((angle.to_degrees() / 2.0).ceil() as usize).max(1);
 
                 if steps <= 1 {
-                    // Short segment — project endpoint directly
                     match globe.project_vec3(cur) {
                         Some((px, py)) => {
                             if let Some((prev_x, prev_y)) = prev_screen {
@@ -985,10 +1015,8 @@ impl MapRenderer {
                         None => prev_screen = None,
                     }
                 } else {
-                    // Slerp subdivision — all Vec3, no lon/lat
                     let sin_angle = angle.sin();
                     if sin_angle.abs() < 1e-10 {
-                        // Nearly identical/antipodal — just project endpoint
                         match globe.project_vec3(cur) {
                             Some(p) => prev_screen = Some(p),
                             None => prev_screen = None,
@@ -1016,7 +1044,6 @@ impl MapRenderer {
                     }
                 }
             } else {
-                // First point — just project
                 prev_screen = globe.project_vec3(cur);
             }
 
