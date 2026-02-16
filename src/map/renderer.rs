@@ -876,7 +876,8 @@ impl MapRenderer {
                 labels.push((char_x, char_y, "☠".to_string(), 0.0));
                 if self.settings.show_labels {
                     if let Some(label_x) = char_x.checked_add(2) {
-                        labels.push((label_x, char_y, format!("~{}", city.name), 0.0));
+                        let label_y = char_y.saturating_sub(1);
+                        labels.push((label_x, label_y, format!("~{}", city.name), 0.0));
                     }
                 }
                 continue;
@@ -905,12 +906,13 @@ impl MapRenderer {
 
             if self.settings.show_labels {
                 if let Some(label_x) = char_x.checked_add(2) {
+                    let label_y = char_y.saturating_sub(1);
                     let label = if self.settings.show_population {
                         format!("{} ({})", city.name, format_population(city.population))
                     } else {
                         city.name.clone()
                     };
-                    labels.push((label_x, char_y, label, health));
+                    labels.push((label_x, label_y, label, health));
                 }
             }
         }
