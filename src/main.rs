@@ -128,6 +128,11 @@ fn run(terminal: &mut DefaultTerminal) -> Result<()> {
                                 app.map_renderer.toggle_population();
                             }
 
+                            // Toggle globe/mercator
+                            KeyCode::Char('g') | KeyCode::Char('G') => {
+                                app.toggle_projection();
+                            }
+
                             // Launch nuke at cursor
                             KeyCode::Char(' ') => {
                                 if let Some((col, row)) = app.mouse_pos {
