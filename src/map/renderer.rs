@@ -14,6 +14,7 @@ pub struct MapLayers {
     pub borders: Rc<BrailleCanvas>,
     pub states: Rc<BrailleCanvas>,
     pub counties: Rc<BrailleCanvas>,
+    pub globe_outline: Option<Rc<BrailleCanvas>>,
     pub labels: Vec<(u16, u16, String, f32)>,
 }
 
@@ -296,6 +297,7 @@ struct RenderCache {
     borders: Rc<BrailleCanvas>,
     states: Rc<BrailleCanvas>,
     counties: Rc<BrailleCanvas>,
+    globe_outline: Option<Rc<BrailleCanvas>>,
 }
 
 /// Fast land/water lookup grid with two-tier conservative approximation.
@@ -645,13 +647,14 @@ impl MapRenderer {
         let cache_borrow = self.cache.borrow();
         let use_cache = cache_borrow.as_ref().map(|c| c.key == cache_key).unwrap_or(false);
 
-        let (coastlines_canvas, borders_canvas, states_canvas, counties_canvas) = if use_cache {
+        let (coastlines_canvas, borders_canvas, states_canvas, counties_canvas, _globe_outline) = if use_cache {
             let cache = cache_borrow.as_ref().unwrap();
             (
                 Rc::clone(&cache.coastlines),
                 Rc::clone(&cache.borders),
                 Rc::clone(&cache.states),
                 Rc::clone(&cache.counties),
+                cache.globe_outline.as_ref().map(Rc::clone),
             )
         } else {
             drop(cache_borrow);
@@ -704,9 +707,10 @@ impl MapRenderer {
                 borders: Rc::clone(&borders_rc),
                 states: Rc::clone(&states_rc),
                 counties: Rc::clone(&counties_rc),
+                globe_outline: None,
             });
 
-            (coastlines_rc, borders_rc, states_rc, counties_rc)
+            (coastlines_rc, borders_rc, states_rc, counties_rc, None)
         };
 
         // Collect cities for glyph rendering (viewport-aware filtering with wrapping)
@@ -752,6 +756,7 @@ impl MapRenderer {
             borders: borders_canvas,
             states: states_canvas,
             counties: counties_canvas,
+            globe_outline: None,
             labels,
         }
     }
@@ -776,13 +781,14 @@ impl MapRenderer {
         let cache_borrow = self.cache.borrow();
         let use_cache = cache_borrow.as_ref().map(|c| c.key == cache_key).unwrap_or(false);
 
-        let (coastlines_canvas, borders_canvas, states_canvas, counties_canvas) = if use_cache {
+        let (coastlines_canvas, borders_canvas, states_canvas, counties_canvas, globe_outline_rc) = if use_cache {
             let cache = cache_borrow.as_ref().unwrap();
             (
                 Rc::clone(&cache.coastlines),
                 Rc::clone(&cache.borders),
                 Rc::clone(&cache.states),
                 Rc::clone(&cache.counties),
+                cache.globe_outline.as_ref().map(Rc::clone),
             )
         } else {
             drop(cache_borrow);
@@ -825,6 +831,25 @@ impl MapRenderer {
                 }
             }
 
+            // Globe outline — only when sphere edge is visible in viewport
+            let globe_outline_rc = if globe.radius < (globe.width.min(globe.height) as f64 / 2.0) {
+                let mut outline = BrailleCanvas::new(width, height);
+                let cx = globe.width as f64 / 2.0;
+                let cy = globe.height as f64 / 2.0;
+                let r = globe.radius;
+                let circumference = 2.0 * std::f64::consts::PI * r;
+                let steps = (circumference * 0.5) as usize; // every other pixel for faintness
+                for i in 0..steps {
+                    let theta = 2.0 * std::f64::consts::PI * i as f64 / steps as f64;
+                    let x = (cx + r * theta.cos()) as usize;
+                    let y = (cy - r * theta.sin()) as usize;
+                    outline.set_pixel(x, y);
+                }
+                Some(Rc::new(outline))
+            } else {
+                None
+            };
+
             let coastlines_rc = Rc::new(coastlines_canvas);
             let borders_rc = Rc::new(borders_canvas);
             let states_rc = Rc::new(states_canvas);
@@ -836,9 +861,10 @@ impl MapRenderer {
                 borders: Rc::clone(&borders_rc),
                 states: Rc::clone(&states_rc),
                 counties: Rc::clone(&counties_rc),
+                globe_outline: globe_outline_rc.as_ref().map(Rc::clone),
             });
 
-            (coastlines_rc, borders_rc, states_rc, counties_rc)
+            (coastlines_rc, borders_rc, states_rc, counties_rc, globe_outline_rc)
         };
 
         // Cities on globe
@@ -871,6 +897,7 @@ impl MapRenderer {
             borders: borders_canvas,
             states: states_canvas,
             counties: counties_canvas,
+            globe_outline: globe_outline_rc,
             labels,
         }
     }

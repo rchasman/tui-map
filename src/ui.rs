@@ -376,6 +376,11 @@ impl MapWidget {
 impl Widget for MapWidget {
     fn render(self, area: Rect, buf: &mut Buffer) {
         // Render layers from back to front:
+        // 0. Globe outline (very faint, behind everything)
+        if let Some(ref outline) = self.layers.globe_outline {
+            self.render_layer(outline, Color::Rgb(50, 50, 50), area, buf);
+        }
+
         // 1. County borders (DarkGray - at back)
         self.render_layer(&self.layers.counties, Color::DarkGray, area, buf);
 
