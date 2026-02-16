@@ -96,20 +96,42 @@ impl<T> SpatialGrid<T> {
     }
 }
 
-/// Spatial index for geographic features using conservative approximation.
+/// Spatial index for geographic features using flat row-major grid.
+/// Fixed-size: lon_cells × lat_cells covering [-180,180] × [-90,90].
+/// O(1) cell lookup via array index — no hash, no probe chains.
+///
 /// Each feature's bounding box is indexed into every cell it overlaps,
 /// guaranteeing no false negatives while allowing false positives
 /// (eliminated by downstream bbox checks in draw_linestring).
 pub struct FeatureGrid {
-    cells: HashMap<(i32, i32), Vec<usize>>,
+    cells: Vec<Vec<usize>>,
     cell_size: f64,
+    lon_cells: usize,
+    lat_cells: usize,
 }
 
 impl FeatureGrid {
     pub fn new(cell_size: f64) -> Self {
+        let lon_cells = (360.0 / cell_size).ceil() as usize;
+        let lat_cells = (180.0 / cell_size).ceil() as usize;
         Self {
-            cells: HashMap::new(),
+            cells: vec![Vec::new(); lon_cells * lat_cells],
             cell_size,
+            lon_cells,
+            lat_cells,
+        }
+    }
+
+    /// Convert lon/lat to flat array index. Returns None if out of bounds.
+    #[inline(always)]
+    fn cell_index(&self, lon_cell: i32, lat_cell: i32) -> Option<usize> {
+        // Offset so -180° → 0, -90° → 0
+        let x = lon_cell + (self.lon_cells as i32 / 2);
+        let y = lat_cell + (self.lat_cells as i32 / 2);
+        if x >= 0 && (x as usize) < self.lon_cells && y >= 0 && (y as usize) < self.lat_cells {
+            Some(y as usize * self.lon_cells + x as usize)
+        } else {
+            None
         }
     }
 
@@ -122,7 +144,9 @@ impl FeatureGrid {
             let max_cell = to_cell(max_lon, max_lat, cell_size);
             for y in min_cell.1..=max_cell.1 {
                 for x in min_cell.0..=max_cell.0 {
-                    grid.cells.entry((x, y)).or_default().push(idx);
+                    if let Some(ci) = grid.cell_index(x, y) {
+                        grid.cells[ci].push(idx);
+                    }
                 }
             }
         }
@@ -136,8 +160,11 @@ impl FeatureGrid {
         let max_cell = to_cell(max_lon, max_lat, self.cell_size);
         for y in min_cell.1..=max_cell.1 {
             for x in min_cell.0..=max_cell.0 {
-                if let Some(indices) = self.cells.get(&(x, y)) {
-                    results.extend_from_slice(indices);
+                if let Some(ci) = self.cell_index(x, y) {
+                    let cell = &self.cells[ci];
+                    if !cell.is_empty() {
+                        results.extend_from_slice(cell);
+                    }
                 }
             }
         }
