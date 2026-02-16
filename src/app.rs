@@ -3,6 +3,41 @@ use crate::hash::{hash3, rand_simple};
 use crate::map::{Lod, MapRenderer, Projection, Viewport};
 use crate::map::globe::GlobeViewport;
 
+#[derive(Clone, Copy, PartialEq)]
+pub enum WeaponType {
+    Nuke,
+    Bio,
+    Emp,
+    Chem,
+}
+
+impl WeaponType {
+    pub fn max_frames(self) -> u8 {
+        match self {
+            WeaponType::Emp => 30,
+            _ => 60,
+        }
+    }
+
+    pub fn symbol(self) -> &'static str {
+        match self {
+            WeaponType::Nuke => "☢",
+            WeaponType::Bio => "☣",
+            WeaponType::Emp => "⚡",
+            WeaponType::Chem => "☠",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            WeaponType::Nuke => "NUKE",
+            WeaponType::Bio => "BIO",
+            WeaponType::Emp => "EMP",
+            WeaponType::Chem => "CHEM",
+        }
+    }
+}
+
 /// A nuclear explosion with position and animation frame
 #[derive(Clone)]
 pub struct Explosion {
@@ -10,6 +45,7 @@ pub struct Explosion {
     pub lat: f64,
     pub frame: u8,
     pub radius_km: f64,
+    pub weapon_type: WeaponType,
 }
 
 /// A spreading fire
@@ -18,6 +54,7 @@ pub struct Fire {
     pub lon: f64,
     pub lat: f64,
     pub intensity: u8, // 0-255, decays over time
+    pub weapon_type: WeaponType,
 }
 
 /// Radioactive fallout zone
@@ -35,6 +72,8 @@ pub struct Fallout {
 pub struct FireGrid {
     /// Max intensity per cell (0 = no fire)
     pub cells: Vec<u8>,
+    /// Weapon type of the max-intensity fire per cell
+    pub weapons: Vec<WeaponType>,
     pub width: usize,
     pub height: usize,
     pub resolution: f64,
@@ -44,8 +83,10 @@ impl FireGrid {
     pub fn new(resolution: f64) -> Self {
         let width = (360.0 / resolution) as usize;
         let height = (180.0 / resolution) as usize;
+        let size = width * height;
         Self {
-            cells: vec![0; width * height],
+            cells: vec![0; size],
+            weapons: vec![WeaponType::Nuke; size],
             width,
             height,
             resolution,
@@ -59,15 +100,16 @@ impl FireGrid {
             let lon_idx = (normalize_lon(fire.lon) / self.resolution) as usize;
             let lat_idx = (normalize_lat(fire.lat) / self.resolution) as usize;
             let idx = lat_idx * self.width + lon_idx;
-            if idx < self.cells.len() {
-                self.cells[idx] = self.cells[idx].max(fire.intensity);
+            if idx < self.cells.len() && fire.intensity > self.cells[idx] {
+                self.cells[idx] = fire.intensity;
+                self.weapons[idx] = fire.weapon_type;
             }
         }
     }
 
     /// Query fires within viewport bounds only (not all cells).
-    /// Returns (lon, lat, intensity) at cell centers.
-    pub fn fires_in_region(&self, min_lon: f64, min_lat: f64, max_lon: f64, max_lat: f64) -> Vec<(f64, f64, u8)> {
+    /// Returns (lon, lat, intensity, weapon_type) at cell centers.
+    pub fn fires_in_region(&self, min_lon: f64, min_lat: f64, max_lon: f64, max_lat: f64) -> Vec<(f64, f64, u8, WeaponType)> {
         let min_x = ((min_lon + 180.0).max(0.0) / self.resolution) as usize;
         let max_x = (((max_lon + 180.0).min(360.0)) / self.resolution).ceil() as usize;
         let min_y = ((min_lat + 90.0).max(0.0) / self.resolution) as usize;
@@ -80,11 +122,12 @@ impl FireGrid {
         for lat_idx in min_y..max_y {
             let row_start = lat_idx * self.width;
             for lon_idx in min_x..max_x {
-                let intensity = self.cells[row_start + lon_idx];
+                let idx = row_start + lon_idx;
+                let intensity = self.cells[idx];
                 if intensity > 0 {
                     let lon = lon_idx as f64 * self.resolution - 180.0 + self.resolution / 2.0;
                     let lat = lat_idx as f64 * self.resolution - 90.0 + self.resolution / 2.0;
-                    results.push((lon, lat, intensity));
+                    results.push((lon, lat, intensity, self.weapons[idx]));
                 }
             }
         }
@@ -115,6 +158,8 @@ pub struct App {
     pub casualties: u64,
     /// Frame counter for animation randomness
     pub frame: u64,
+    /// Currently selected weapon
+    pub active_weapon: WeaponType,
     /// Last frame when a nuke was launched (for cooldown)
     last_nuke_frame: u64,
     /// Globe horizontal spin momentum (radians/frame, vertical axis only)
@@ -142,6 +187,7 @@ impl App {
             fire_grid_fine: FireGrid::new(0.25),
             fallout: Vec::new(),
             casualties: 0,
+            active_weapon: WeaponType::Nuke,
             frame: 0,
             last_nuke_frame: 0,
             spin_velocity: 0.0,
@@ -260,7 +306,12 @@ impl App {
         })
     }
 
-    /// Launch a nuke at the given screen position
+    /// Select active weapon
+    pub fn select_weapon(&mut self, weapon: WeaponType) {
+        self.active_weapon = weapon;
+    }
+
+    /// Launch the active weapon at the given screen position
     pub fn launch_nuke(&mut self, col: u16, row: u16) {
         const NUKE_COOLDOWN_FRAMES: u64 = 15;
 
@@ -279,69 +330,92 @@ impl App {
 
         self.last_nuke_frame = self.frame;
 
-        let radius_km = 50.0 + 700.0 / self.projection.effective_zoom();
+        let weapon = self.active_weapon;
+        let base_radius = 50.0 + 700.0 / self.projection.effective_zoom();
+        let radius_km = match weapon {
+            WeaponType::Emp => base_radius * 1.5,
+            _ => base_radius,
+        };
 
         self.explosions.push(Explosion {
             lon,
             lat,
             frame: 0,
             radius_km,
+            weapon_type: weapon,
         });
 
-        // Spawn MASSIVE DENSE fire coverage - scale with area, not radius
-        // Fire density should be consistent regardless of zoom level
-        let area_km2 = std::f64::consts::PI * radius_km * radius_km;
-        // Target: ~1 fire per 5km² for dense coverage, cap at 20k fires per blast
-        let target_fires = ((area_km2 / 5.0) as usize + 200).min(20000);
-
-        // Pre-allocate to avoid reallocations
-        self.fires.reserve(target_fires);
-
-        // Batch generate fires using rejection sampling (faster than individual checks)
-        let cos_lat = lat.to_radians().cos().max(0.1);
-        let mut spawned = 0;
-        let mut attempt = 0;
-
-        while spawned < target_fires && attempt < target_fires * 2 {
-            // Generate fire position
-            let angle = rand_simple((attempt as u64).wrapping_mul(7919)) * std::f64::consts::TAU;
-            let rand_dist = rand_simple((attempt as u64).wrapping_mul(6547));
-            let dist = radius_km * rand_dist.sqrt();
-
-            let dlat = (dist * angle.sin()) / 111.0;
-            let dlon = (dist * angle.cos()) / (111.0 * cos_lat);
-
-            let fire_lon = lon + dlon;
-            let fire_lat = lat + dlat;
-
-            attempt += 1;
-
-            // Fast O(1) land check
-            if !self.map_renderer.is_on_land(fire_lon, fire_lat) {
-                continue;
+        // Spawn fires (weapon-dependent)
+        match weapon {
+            WeaponType::Bio | WeaponType::Emp => {
+                // Bio and EMP produce no fires
             }
+            _ => {
+                let area_km2 = std::f64::consts::PI * radius_km * radius_km;
+                let fire_scale = match weapon {
+                    WeaponType::Chem => 0.6,  // 60% fire count
+                    _ => 1.0,
+                };
+                let target_fires = (((area_km2 / 5.0) * fire_scale) as usize + 200).min(20000);
 
-            // Vary intensity based on distance from center
-            let center_factor = 1.0 - (dist / radius_km);
-            let base_intensity = 200.0 + center_factor * 55.0;
-            let intensity = (base_intensity + rand_simple((attempt as u64).wrapping_add(1000)) * 30.0).min(255.0) as u8;
+                self.fires.reserve(target_fires);
 
-            self.fires.push(Fire {
-                lon: fire_lon,
-                lat: fire_lat,
-                intensity,
-            });
+                let cos_lat = lat.to_radians().cos().max(0.1);
+                let mut spawned = 0;
+                let mut attempt = 0;
 
-            spawned += 1;
+                while spawned < target_fires && attempt < target_fires * 2 {
+                    let angle = rand_simple((attempt as u64).wrapping_mul(7919)) * std::f64::consts::TAU;
+                    let rand_dist = rand_simple((attempt as u64).wrapping_mul(6547));
+                    let dist = radius_km * rand_dist.sqrt();
+
+                    let dlat = (dist * angle.sin()) / 111.0;
+                    let dlon = (dist * angle.cos()) / (111.0 * cos_lat);
+
+                    let fire_lon = lon + dlon;
+                    let fire_lat = lat + dlat;
+
+                    attempt += 1;
+
+                    if !self.map_renderer.is_on_land(fire_lon, fire_lat) {
+                        continue;
+                    }
+
+                    let center_factor = 1.0 - (dist / radius_km);
+                    let base_intensity = 200.0 + center_factor * 55.0;
+                    let intensity = (base_intensity + rand_simple((attempt as u64).wrapping_add(1000)) * 30.0).min(255.0) as u8;
+
+                    self.fires.push(Fire {
+                        lon: fire_lon,
+                        lat: fire_lat,
+                        intensity,
+                        weapon_type: weapon,
+                    });
+
+                    spawned += 1;
+                }
+            }
         }
 
-        // Create fallout zone (larger than blast, persists longer)
-        self.fallout.push(Fallout {
-            lon,
-            lat,
-            radius_km: radius_km * 2.0, // Fallout spreads wider than blast
-            intensity: 1000, // Lasts ~1000 frames
-        });
+        // Create fallout zone (weapon-dependent)
+        match weapon {
+            WeaponType::Emp => {
+                // EMP produces no fallout
+            }
+            _ => {
+                let (fallout_radius_mult, fallout_intensity) = match weapon {
+                    WeaponType::Bio => (3.0, 3000),    // 3× radius, 3× intensity
+                    WeaponType::Chem => (2.5, 2000),   // 2.5× radius, 2× intensity
+                    _ => (2.0, 1000),                   // Nuke default
+                };
+                self.fallout.push(Fallout {
+                    lon,
+                    lat,
+                    radius_km: radius_km * fallout_radius_mult,
+                    intensity: fallout_intensity,
+                });
+            }
+        }
 
         // Calculate immediate blast casualties
         self.apply_blast_damage(lon, lat, radius_km);
@@ -417,7 +491,7 @@ impl App {
 
         self.explosions.retain_mut(|exp| {
             exp.frame += 1;
-            exp.frame < 60 // Animation lasts 60 frames (~1 second at 60fps)
+            exp.frame < exp.weapon_type.max_frames()
         });
 
         // Update fires - VERY slow decay and VERY aggressive spreading
@@ -454,6 +528,7 @@ impl App {
                             lon: new_lon,
                             lat: new_lat,
                             intensity: fire.intensity.saturating_sub(10),
+                            weapon_type: fire.weapon_type,
                         });
                     }
                 }
