@@ -1,6 +1,6 @@
 use crate::app::App;
 use crate::hash::{hash2, hash3};
-use crate::map::{MapLayers, WRAP_OFFSETS};
+use crate::map::{MapLayers, Projection, WRAP_OFFSETS};
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Direction, Layout, Rect},
@@ -42,14 +42,13 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    // Update viewport size for rendering
-    let mut viewport = app.viewport.clone();
+    // Update projection size for rendering
+    let mut projection = app.projection.clone();
     // Braille gives 2x4 resolution per character
-    viewport.width = inner.width as usize * 2;
-    viewport.height = inner.height as usize * 4;
+    projection.set_size(inner.width as usize * 2, inner.height as usize * 4);
 
     // Render map layers
-    let layers = app.map_renderer.render(inner.width as usize, inner.height as usize, &viewport);
+    let layers = app.map_renderer.render(inner.width as usize, inner.height as usize, &projection);
 
     // Get mouse cursor position for marker
     let cursor_pos = app.mouse_pixel_pos().and_then(|(px, py)| {
@@ -64,43 +63,41 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
     });
 
     // Convert explosions to screen coordinates with aggressive culling
-    // Note: Damage calculations still run in app.update_explosions() regardless of viewport
-    // This only culls *rendering* to avoid expensive O(r²) nested loops for off-screen effects
     let mut explosions: Vec<ExplosionRender> = Vec::with_capacity(50);
+    let is_globe = matches!(projection, Projection::Globe(_));
     for exp in &app.explosions {
-        // Try normal position and wrapped positions
-        for &offset in &WRAP_OFFSETS {
-            let ((px, py), _) = viewport.project_wrapped(exp.lon, exp.lat, offset);
-
-            // Bounds check with safety margin to prevent u16 overflow panics
-            if px < 0 || py < 0 || px > 30000 || py > 30000 {
-                continue;
+        // Globe: single project call (no wrapping needed)
+        // Mercator: try wrap offsets
+        let screen_positions: Vec<(i32, i32)> = if is_globe {
+            projection.project_point(exp.lon, exp.lat).into_iter().collect()
+        } else {
+            if let Projection::Mercator(ref vp) = projection {
+                WRAP_OFFSETS.iter().filter_map(|&offset| {
+                    let ((px, py), _) = vp.project_wrapped(exp.lon, exp.lat, offset);
+                    (px >= 0 && py >= 0 && px <= 30000 && py <= 30000).then_some((px, py))
+                }).collect()
+            } else {
+                Vec::new()
             }
+        };
 
+        for (px, py) in screen_positions {
             let cx = (px / 2) as u16;
             let cy = (py / 4) as u16;
 
-            // Convert radius_km to screen chars (rough: 1 degree ~= 111km at equator)
             let degrees = exp.radius_km / 111.0;
-            let pixels = (degrees * viewport.zoom * inner.width as f64 / 360.0) as u16;
+            let pixels = projection.deg_to_pixels(degrees) as u16;
             let radius = (pixels / 2).max(3);
 
-            // Note: No visual scaling applied - explosions render at their true size
-            // The radius_km already reflects the actual blast size (525km at zoom 1x, 50km at zoom 20x)
-
-            // Cull if too small to see when zoomed out (< 2 chars radius)
             if radius < 2 {
                 continue;
             }
 
-            // Cull if entirely off-screen
-            // Check if any part of the explosion circle intersects the screen
             let left_edge = cx.saturating_sub(radius);
             let top_edge = cy.saturating_sub(radius);
             let right_edge = cx.saturating_add(radius);
             let bottom_edge = cy.saturating_add(radius);
 
-            // Skip if completely off-screen
             if right_edge < 1 || bottom_edge < 1 || left_edge >= inner.width || top_edge >= inner.height {
                 continue;
             }
@@ -130,44 +127,55 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
         }
     };
 
-    // Hierarchical fire rendering: pick grid resolution based on zoom
-    // deg_per_char >= 1.0 → coarse 1° grid (cell fits within 1 char)
-    // deg_per_char >= 0.25 → fine 0.25° grid (cell fits within 1 char)
-    // deg_per_char < 0.25 → individual fires for full detail
-    let deg_per_char = 360.0 / (viewport.zoom * inner.width as f64);
-    let half_width_deg = 180.0 / viewport.zoom;
-    let vp_min_lon = viewport.center_lon - half_width_deg * 1.5;
-    let vp_max_lon = viewport.center_lon + half_width_deg * 1.5;
-    // Use exact Mercator unproject for latitude bounds — the linear
-    // approximation breaks down because Mercator stretches latitude
-    // non-linearly and the viewport aspect ratio skews coverage.
-    let (_, top_lat) = viewport.unproject(0, 0);
-    let (_, bottom_lat) = viewport.unproject(0, viewport.height as i32);
-    let lat_pad = (top_lat - bottom_lat).abs() * 0.25;
-    let vp_min_lat = (bottom_lat - lat_pad).max(-90.0);
-    let vp_max_lat = (top_lat + lat_pad).min(90.0);
+    // Compute viewport bounds for fire culling
+    let zoom = projection.effective_zoom();
+    let (vp_min_lon, vp_min_lat, vp_max_lon, vp_max_lat) = if is_globe {
+        if let Projection::Globe(ref g) = projection {
+            let bounds = g.visible_bounds();
+            // Add padding for fire rendering
+            ((bounds.0 - 5.0).max(-180.0), (bounds.1 - 5.0).max(-90.0),
+             (bounds.2 + 5.0).min(180.0), (bounds.3 + 5.0).min(90.0))
+        } else {
+            unreachable!()
+        }
+    } else {
+        if let Projection::Mercator(ref vp) = projection {
+            let half_width_deg = 180.0 / vp.zoom;
+            let min_lon = vp.center_lon - half_width_deg * 1.5;
+            let max_lon = vp.center_lon + half_width_deg * 1.5;
+            let (_, top_lat) = vp.unproject(0, 0);
+            let (_, bottom_lat) = vp.unproject(0, vp.height as i32);
+            let lat_pad = (top_lat - bottom_lat).abs() * 0.25;
+            ((min_lon), (bottom_lat - lat_pad).max(-90.0),
+             (max_lon), (top_lat + lat_pad).min(90.0))
+        } else {
+            unreachable!()
+        }
+    };
+
+    // Hierarchical fire rendering based on zoom
+    let deg_per_char = 360.0 / (zoom * inner.width as f64);
 
     if deg_per_char >= 0.25 {
-        // Grid-based rendering: query only viewport cells
         let grid = if deg_per_char >= 1.0 { &app.fire_grid } else { &app.fire_grid_fine };
         let mut fires_data = grid.fires_in_region(
             vp_min_lon.max(-180.0), vp_min_lat, vp_max_lon.min(180.0), vp_max_lat,
         );
-        // Handle date-line wrapping
-        if vp_min_lon < -180.0 {
-            fires_data.extend(grid.fires_in_region(vp_min_lon + 360.0, vp_min_lat, 180.0, vp_max_lat));
-        }
-        if vp_max_lon > 180.0 {
-            fires_data.extend(grid.fires_in_region(-180.0, vp_min_lat, vp_max_lon - 360.0, vp_max_lat));
+        if !is_globe {
+            if vp_min_lon < -180.0 {
+                fires_data.extend(grid.fires_in_region(vp_min_lon + 360.0, vp_min_lat, 180.0, vp_max_lat));
+            }
+            if vp_max_lon > 180.0 {
+                fires_data.extend(grid.fires_in_region(-180.0, vp_min_lat, vp_max_lon - 360.0, vp_max_lat));
+            }
         }
 
         for (lon, lat, intensity) in fires_data {
-            if let Some((px, py)) = viewport.project_wrapped_first(lon, lat) {
+            if let Some((px, py)) = projection.project_point(lon, lat) {
                 add_fire((px / 2) as usize, (py / 4) as usize, intensity);
             }
         }
     } else {
-        // High zoom: render individual fires for full detail
         for fire in &app.fires {
             if fire.intensity < 10 {
                 continue;
@@ -176,14 +184,16 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
             if !in_lat {
                 continue;
             }
-            let in_lon = (fire.lon >= vp_min_lon && fire.lon <= vp_max_lon) ||
-                         (fire.lon - 360.0 >= vp_min_lon && fire.lon - 360.0 <= vp_max_lon) ||
-                         (fire.lon + 360.0 >= vp_min_lon && fire.lon + 360.0 <= vp_max_lon);
-            if !in_lon {
-                continue;
+            if !is_globe {
+                let in_lon = (fire.lon >= vp_min_lon && fire.lon <= vp_max_lon) ||
+                             (fire.lon - 360.0 >= vp_min_lon && fire.lon - 360.0 <= vp_max_lon) ||
+                             (fire.lon + 360.0 >= vp_min_lon && fire.lon + 360.0 <= vp_max_lon);
+                if !in_lon {
+                    continue;
+                }
             }
 
-            if let Some((px, py)) = viewport.project_wrapped_first(fire.lon, fire.lat) {
+            if let Some((px, py)) = projection.project_point(fire.lon, fire.lat) {
                 add_fire((px / 2) as usize, (py / 4) as usize, fire.intensity);
             }
         }
@@ -206,11 +216,10 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
 
     // Calculate blast radius for cursor reticle
     let cursor_blast_radius = if cursor_pos.is_some() {
-        // Same formula as launch_nuke for actual blast
-        let radius_km = 50.0 + 700.0 / viewport.zoom;
+        let radius_km = 50.0 + 700.0 / zoom;
         let degrees = radius_km / 111.0;
-        let pixels = (degrees * viewport.zoom * inner.width as f64 / 360.0) as u16;
-        Some((pixels / 2).max(3)) // True size, minimum 3 chars for visibility
+        let pixels = projection.deg_to_pixels(degrees) as u16;
+        Some((pixels / 2).max(3))
     } else {
         None
     };
@@ -615,12 +624,15 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     let settings = &app.map_renderer.settings;
 
     let status = Line::from(vec![
-        Span::styled(" Zoom: ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            if app.is_globe() { "[G]lobe " } else { "[M]ap " },
+            Style::default().fg(if app.is_globe() { Color::Magenta } else { Color::Cyan }),
+        ),
+        Span::styled("Zoom: ", Style::default().fg(Color::DarkGray)),
         Span::styled(app.zoom_level(), Style::default().fg(Color::Yellow)),
         Span::styled(" (", Style::default().fg(Color::DarkGray)),
         Span::styled(app.lod_level(), Style::default().fg(Color::Magenta)),
         Span::styled(") ", Style::default().fg(Color::DarkGray)),
-        // Toggle indicators
         Span::styled(
             if settings.show_borders { "[B]order " } else { "[b]order " },
             Style::default().fg(if settings.show_borders { Color::Green } else { Color::DarkGray }),
