@@ -357,15 +357,12 @@ impl Widget for MapWidget {
                 Style::default().fg(Color::Rgb(brightness, brightness, brightness)).bg(Color::Reset)
             };
 
-            // Label truncates as population diminishes (markers always 1 char)
             let max_len = (self.inner_width.saturating_sub(*lx)) as usize;
-            let max_display = if is_marker {
-                1
+            let display_text: String = if is_marker {
+                display_text_raw.chars().take(1).collect()
             } else {
-                // 8 chars at near-death, 24 at full health
-                (8.0 + 16.0 * health) as usize
+                display_text_raw.chars().take(max_len).collect()
             };
-            let display_text: String = display_text_raw.chars().take(max_len.min(max_display)).collect();
 
             for (i, ch) in display_text.chars().enumerate() {
                 let px = x + i as u16;

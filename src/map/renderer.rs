@@ -890,7 +890,12 @@ impl MapRenderer {
                 labels.push((char_x, label_y, "☠".to_string(), 0.0));
                 if self.settings.show_labels {
                     if let Some(label_x) = char_x.checked_add(1) {
-                        labels.push((label_x, label_y, format!(" {}", city.name), 0.0));
+                        let label = if self.settings.show_population {
+                            format!(" {} (0)", city.name)
+                        } else {
+                            format!(" {}", city.name)
+                        };
+                        labels.push((label_x, label_y, label, 0.0));
                     }
                 }
                 continue;
