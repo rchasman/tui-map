@@ -5,13 +5,15 @@ use crate::geo::{normalize_lat, normalize_lon};
 use crate::map::projection::{Projection, Viewport, WRAP_OFFSETS};
 use crate::map::spatial::{FeatureGrid, SpatialGrid};
 use std::cell::RefCell;
+use std::rc::Rc;
 
-/// Rendered map layers with separate canvases for color differentiation
+/// Rendered map layers with separate canvases for color differentiation.
+/// Static layers use Rc — cache hits are a refcount bump, not a memcpy.
 pub struct MapLayers {
-    pub coastlines: BrailleCanvas,
-    pub borders: BrailleCanvas,
-    pub states: BrailleCanvas,
-    pub counties: BrailleCanvas,
+    pub coastlines: Rc<BrailleCanvas>,
+    pub borders: Rc<BrailleCanvas>,
+    pub states: Rc<BrailleCanvas>,
+    pub counties: Rc<BrailleCanvas>,
     pub labels: Vec<(u16, u16, String, f32)>,
 }
 
@@ -287,13 +289,13 @@ impl RenderCacheKey {
     }
 }
 
-/// Cached static layer renders
+/// Cached static layer renders (Rc-shared with MapLayers)
 struct RenderCache {
     key: RenderCacheKey,
-    coastlines: BrailleCanvas,
-    borders: BrailleCanvas,
-    states: BrailleCanvas,
-    counties: BrailleCanvas,
+    coastlines: Rc<BrailleCanvas>,
+    borders: Rc<BrailleCanvas>,
+    states: Rc<BrailleCanvas>,
+    counties: Rc<BrailleCanvas>,
 }
 
 /// Fast land/water lookup grid with two-tier conservative approximation.
@@ -646,10 +648,10 @@ impl MapRenderer {
         let (coastlines_canvas, borders_canvas, states_canvas, counties_canvas) = if use_cache {
             let cache = cache_borrow.as_ref().unwrap();
             (
-                cache.coastlines.clone(),
-                cache.borders.clone(),
-                cache.states.clone(),
-                cache.counties.clone(),
+                Rc::clone(&cache.coastlines),
+                Rc::clone(&cache.borders),
+                Rc::clone(&cache.states),
+                Rc::clone(&cache.counties),
             )
         } else {
             drop(cache_borrow);
@@ -691,15 +693,20 @@ impl MapRenderer {
                 }
             }
 
+            let coastlines_rc = Rc::new(coastlines_canvas);
+            let borders_rc = Rc::new(borders_canvas);
+            let states_rc = Rc::new(states_canvas);
+            let counties_rc = Rc::new(counties_canvas);
+
             *self.cache.borrow_mut() = Some(RenderCache {
                 key: cache_key,
-                coastlines: coastlines_canvas.clone(),
-                borders: borders_canvas.clone(),
-                states: states_canvas.clone(),
-                counties: counties_canvas.clone(),
+                coastlines: Rc::clone(&coastlines_rc),
+                borders: Rc::clone(&borders_rc),
+                states: Rc::clone(&states_rc),
+                counties: Rc::clone(&counties_rc),
             });
 
-            (coastlines_canvas, borders_canvas, states_canvas, counties_canvas)
+            (coastlines_rc, borders_rc, states_rc, counties_rc)
         };
 
         // Collect cities for glyph rendering (viewport-aware filtering with wrapping)
@@ -772,10 +779,10 @@ impl MapRenderer {
         let (coastlines_canvas, borders_canvas, states_canvas, counties_canvas) = if use_cache {
             let cache = cache_borrow.as_ref().unwrap();
             (
-                cache.coastlines.clone(),
-                cache.borders.clone(),
-                cache.states.clone(),
-                cache.counties.clone(),
+                Rc::clone(&cache.coastlines),
+                Rc::clone(&cache.borders),
+                Rc::clone(&cache.states),
+                Rc::clone(&cache.counties),
             )
         } else {
             drop(cache_borrow);
@@ -818,15 +825,20 @@ impl MapRenderer {
                 }
             }
 
+            let coastlines_rc = Rc::new(coastlines_canvas);
+            let borders_rc = Rc::new(borders_canvas);
+            let states_rc = Rc::new(states_canvas);
+            let counties_rc = Rc::new(counties_canvas);
+
             *self.cache.borrow_mut() = Some(RenderCache {
                 key: cache_key,
-                coastlines: coastlines_canvas.clone(),
-                borders: borders_canvas.clone(),
-                states: states_canvas.clone(),
-                counties: counties_canvas.clone(),
+                coastlines: Rc::clone(&coastlines_rc),
+                borders: Rc::clone(&borders_rc),
+                states: Rc::clone(&states_rc),
+                counties: Rc::clone(&counties_rc),
             });
 
-            (coastlines_canvas, borders_canvas, states_canvas, counties_canvas)
+            (coastlines_rc, borders_rc, states_rc, counties_rc)
         };
 
         // Cities on globe
@@ -1000,10 +1012,10 @@ impl MapRenderer {
                 }
 
                 let dot = pv.dot(cur).clamp(-1.0, 1.0);
-                let angle = dot.acos();
-                let steps = ((angle.to_degrees() / 2.0).ceil() as usize).max(1);
 
-                if steps <= 1 {
+                // Fast path: dot > cos(2°) ≈ 0.9994 means angle < 2°, steps = 1.
+                // Skips acos + sin entirely — handles ~95% of segments.
+                if dot > 0.9994 {
                     match globe.project_vec3(cur) {
                         Some((px, py)) => {
                             if let Some((prev_x, prev_y)) = prev_screen {
@@ -1017,12 +1029,13 @@ impl MapRenderer {
                         None => prev_screen = None,
                     }
                 } else {
+                    // Slow path: large arc — subdivide with slerp
+                    let angle = dot.acos();
+                    let steps = ((angle.to_degrees() / 2.0).ceil() as usize).max(1);
                     let sin_angle = angle.sin();
+
                     if sin_angle.abs() < 1e-10 {
-                        match globe.project_vec3(cur) {
-                            Some(p) => prev_screen = Some(p),
-                            None => prev_screen = None,
-                        }
+                        prev_screen = globe.project_vec3(cur);
                     } else {
                         for i in 1..=steps {
                             let t = i as f64 / steps as f64;
