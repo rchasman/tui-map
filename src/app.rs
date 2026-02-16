@@ -407,8 +407,10 @@ impl App {
             if self.spin_velocity.abs() > 0.0001 {
                 if let Projection::Globe(ref mut g) = self.projection {
                     g.apply_momentum(self.spin_velocity, 0.0);
+                    // Decay faster when zoomed in — same angular velocity moves more screen pixels
+                    let decay = 0.995_f64.powf(g.effective_zoom());
+                    self.spin_velocity *= decay;
                 }
-                self.spin_velocity *= 0.995;
             }
         }
 
