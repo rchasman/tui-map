@@ -1,6 +1,7 @@
 use crate::app::{App, WeaponType};
 use crate::hash::{hash2, hash3};
-use crate::map::{MapLayers, Projection, WRAP_OFFSETS};
+use crate::map::{GlobeViewport, MapLayers, Projection, WRAP_OFFSETS};
+use crate::map::globe::lonlat_to_vec3;
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Direction, Layout, Rect},
@@ -102,7 +103,10 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
                 continue;
             }
 
-            explosions.push(ExplosionRender { x: cx, y: cy, frame: exp.frame, radius, weapon_type: exp.weapon_type });
+            explosions.push(ExplosionRender {
+                x: cx, y: cy, frame: exp.frame, radius, weapon_type: exp.weapon_type,
+                lon: exp.lon, lat: exp.lat, radius_km: exp.radius_km,
+            });
         }
     }
 
@@ -196,31 +200,33 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
         })
         .collect();
 
-    // Calculate blast radius for cursor reticle (EMP is 1.5× wider)
-    let cursor_blast_radius = if cursor_pos.is_some() {
+    // Cursor geographic position (for globe-aware reticle)
+    let cursor_geo = cursor_pos.and_then(|(cx, cy)| {
+        projection.unproject(cx as i32 * 2, cy as i32 * 4)
+    });
+
+    // Blast radius in km (EMP is 1.5× wider)
+    let cursor_blast_km = {
         let base_radius = 50.0 + 700.0 / zoom;
-        let radius_km = match app.active_weapon {
+        match app.active_weapon {
             WeaponType::Emp => base_radius * 1.5,
             _ => base_radius,
-        };
-        let degrees = radius_km / 111.0;
-        let pixels = projection.deg_to_pixels(degrees) as u16;
-        Some((pixels / 2).max(3))
-    } else {
-        None
+        }
     };
 
     // Render braille map
     let map_widget = MapWidget {
         layers,
         cursor_pos,
-        cursor_blast_radius,
+        cursor_geo,
+        cursor_blast_km,
         active_weapon: app.active_weapon,
         explosions,
         fires,
         inner_width: inner.width,
         inner_height: inner.height,
         frame: app.frame,
+        projection,
     };
     frame.render_widget(map_widget, inner);
 }
@@ -232,6 +238,9 @@ struct ExplosionRender {
     frame: u8,
     radius: u16, // Visual radius in chars
     weapon_type: WeaponType,
+    lon: f64,
+    lat: f64,
+    radius_km: f64,
 }
 
 /// A fire to render
@@ -247,13 +256,15 @@ struct FireRender {
 struct MapWidget {
     layers: MapLayers,
     cursor_pos: Option<(u16, u16)>,
-    cursor_blast_radius: Option<u16>,
+    cursor_geo: Option<(f64, f64)>,
+    cursor_blast_km: f64,
     active_weapon: WeaponType,
     explosions: Vec<ExplosionRender>,
     fires: Vec<FireRender>,
     inner_width: u16,
     inner_height: u16,
     frame: u64,
+    projection: Projection,
 }
 
 impl MapWidget {
@@ -373,24 +384,57 @@ impl Widget for MapWidget {
         }
 
         // Render explosions — dispatch per weapon type
+        let globe_ref = match &self.projection {
+            Projection::Globe(g) => Some(g),
+            _ => None,
+        };
         for exp in &self.explosions {
             let x = area.x + exp.x;
             let y = area.y + exp.y;
 
             match exp.weapon_type {
-                WeaponType::Nuke => render_nuke_explosion(exp, x, y, area, self.frame, buf),
-                WeaponType::Bio => render_bio_explosion(exp, x, y, area, self.frame, buf),
-                WeaponType::Emp => render_emp_explosion(exp, x, y, area, self.frame, buf),
-                WeaponType::Chem => render_chem_explosion(exp, x, y, area, self.frame, buf),
+                WeaponType::Nuke => render_nuke_explosion(exp, x, y, area, self.frame, buf, globe_ref),
+                WeaponType::Bio => render_bio_explosion(exp, x, y, area, self.frame, buf, globe_ref),
+                WeaponType::Emp => render_emp_explosion(exp, x, y, area, self.frame, buf, globe_ref),
+                WeaponType::Chem => render_chem_explosion(exp, x, y, area, self.frame, buf, globe_ref),
             }
         }
 
-        // Render cursor blast radius circle — color from active weapon
+        // Render cursor targeting reticle — color from active weapon
         let reticle_color = weapon_color(self.active_weapon);
         if let Some((cx, cy)) = self.cursor_pos {
-            if let Some(radius) = self.cursor_blast_radius {
-                let center_x = area.x as i32 + cx as i32;
-                let center_y = area.y as i32 + cy as i32;
+            let center_x = area.x as i32 + cx as i32;
+            let center_y = area.y as i32 + cy as i32;
+
+            if let Projection::Globe(ref globe) = self.projection {
+                // Globe: project geographic circle onto sphere surface
+                if let Some((cursor_lon, cursor_lat)) = self.cursor_geo {
+                    let radius_deg = self.cursor_blast_km / 111.0;
+                    let cos_lat = cursor_lat.to_radians().cos().max(0.1);
+
+                    for i in 0..128u32 {
+                        let angle = (i as f64 / 128.0) * std::f64::consts::TAU;
+                        let dlat = radius_deg * angle.sin();
+                        let dlon = (radius_deg * angle.cos()) / cos_lat;
+
+                        if let Some((px, py)) = globe.project(cursor_lon + dlon, cursor_lat + dlat) {
+                            let scx = px / 2;
+                            let scy = py / 4;
+
+                            if scx >= 0 && scx < self.inner_width as i32
+                                && scy >= 0 && scy < self.inner_height as i32 {
+                                buf[(area.x + scx as u16, area.y + scy as u16)]
+                                    .set_char('·')
+                                    .set_fg(reticle_color);
+                            }
+                        }
+                    }
+                }
+            } else {
+                // Mercator: screen-space circle
+                let degrees = self.cursor_blast_km / 111.0;
+                let pixels = self.projection.deg_to_pixels(degrees) as u16;
+                let radius = (pixels / 2).max(3);
                 let r = radius as i32;
 
                 let min_x = (center_x - r).max(area.x as i32);
@@ -416,13 +460,14 @@ impl Widget for MapWidget {
                         }
                     }
                 }
+            }
 
-                if center_x >= area.x as i32 && center_x < (area.x + area.width) as i32 &&
-                   center_y >= area.y as i32 && center_y < (area.y + area.height) as i32 {
-                    buf[(center_x as u16, center_y as u16)]
-                        .set_char('✕')
-                        .set_fg(reticle_color);
-                }
+            // Center crosshair
+            if center_x >= area.x as i32 && center_x < (area.x + area.width) as i32 &&
+               center_y >= area.y as i32 && center_y < (area.y + area.height) as i32 {
+                buf[(center_x as u16, center_y as u16)]
+                    .set_char('✕')
+                    .set_fg(reticle_color);
             }
         }
     }
@@ -441,7 +486,7 @@ fn weapon_color(weapon: WeaponType) -> Color {
 // ── Per-weapon explosion renderers ──────────────────────────────────────────
 
 /// Nuke: mushroom cloud rising UPWARD — white → yellow → orange → red → smoke
-fn render_nuke_explosion(exp: &ExplosionRender, x: u16, y: u16, area: Rect, global_frame: u64, buf: &mut Buffer) {
+fn render_nuke_explosion(exp: &ExplosionRender, x: u16, y: u16, area: Rect, global_frame: u64, buf: &mut Buffer, globe: Option<&GlobeViewport>) {
     let progress = if exp.frame < 20 {
         (exp.frame as f32 / 20.0).powf(0.7)
     } else if exp.frame < 40 {
@@ -509,6 +554,12 @@ fn render_nuke_explosion(exp: &ExplosionRender, x: u16, y: u16, area: Rect, glob
                 if px_signed < 0 || px_signed >= (area.x + area.width) as i16 { continue; }
                 let px = px_signed as u16;
 
+                if let Some(g) = globe {
+                    let bx = (px as i32 - area.x as i32) * 2;
+                    let by = (py as i32 - area.y as i32) * 4;
+                    if g.pixel_to_sphere_point(bx, by).is_none() { continue; }
+                }
+
                 let radial_dist = dist_sq.sqrt() / (cap_width * height_factor);
                 let vertical_factor = (-dy as f32) / cap_height as f32;
                 let dist_norm = (radial_dist * 0.5 + vertical_factor * 0.5).min(1.0);
@@ -555,7 +606,7 @@ fn render_nuke_explosion(exp: &ExplosionRender, x: u16, y: u16, area: Rect, glob
 }
 
 /// Bio: low creeping fog — wide but stays low, neon green palette, irregular tendrils
-fn render_bio_explosion(exp: &ExplosionRender, x: u16, y: u16, area: Rect, global_frame: u64, buf: &mut Buffer) {
+fn render_bio_explosion(exp: &ExplosionRender, x: u16, y: u16, area: Rect, global_frame: u64, buf: &mut Buffer, globe: Option<&GlobeViewport>) {
     let progress = if exp.frame < 20 {
         (exp.frame as f32 / 20.0).powf(0.5) // Faster initial spread
     } else if exp.frame < 40 {
@@ -614,6 +665,12 @@ fn render_bio_explosion(exp: &ExplosionRender, x: u16, y: u16, area: Rect, globa
                 if px_signed < 0 || px_signed >= (area.x + area.width) as i16 { continue; }
                 let px = px_signed as u16;
 
+                if let Some(g) = globe {
+                    let bx = (px as i32 - area.x as i32) * 2;
+                    let by = (py as i32 - area.y as i32) * 4;
+                    if g.pixel_to_sphere_point(bx, by).is_none() { continue; }
+                }
+
                 let radial_dist = dist_sq.sqrt() / (cap_width * height_factor).max(1.0);
                 let dist_norm = (radial_dist * 0.6 + height_ratio * 0.4).min(1.0);
 
@@ -655,7 +712,7 @@ fn render_bio_explosion(exp: &ExplosionRender, x: u16, y: u16, area: Rect, globa
 }
 
 /// EMP: expanding concentric rings — electric blue/cyan, fast, short duration
-fn render_emp_explosion(exp: &ExplosionRender, x: u16, y: u16, area: Rect, global_frame: u64, buf: &mut Buffer) {
+fn render_emp_explosion(exp: &ExplosionRender, x: u16, y: u16, area: Rect, global_frame: u64, buf: &mut Buffer, globe: Option<&GlobeViewport>) {
     // 3 rings expanding at staggered speeds, fills radius by frame 15
     let progress = (exp.frame as f32 / 15.0).min(1.0); // Full expansion by frame 15
     let fade = if exp.frame > 15 { (exp.frame - 15) as f32 / 15.0 } else { 0.0 };
@@ -670,6 +727,13 @@ fn render_emp_explosion(exp: &ExplosionRender, x: u16, y: u16, area: Rect, globa
     ];
     let ring_thickness = 2.0_f32; // ~2 chars thick
 
+    // Globe: geographic → screen distance mapping (angular distance × scale factor)
+    let center_vec = lonlat_to_vec3(exp.lon, exp.lat);
+    let geo_scale = {
+        let max_angle = exp.radius_km / 6371.0;
+        exp.radius as f64 / max_angle
+    };
+
     // Scan area covers full circle (above AND below cursor)
     let scan_r = (max_r as i16) + 3;
 
@@ -683,7 +747,20 @@ fn render_emp_explosion(exp: &ExplosionRender, x: u16, y: u16, area: Rect, globa
             if px_signed < 0 || px_signed >= (area.x + area.width) as i16 { continue; }
             let px = px_signed as u16;
 
-            let dist = ((dx * dx + dy * dy) as f32).sqrt();
+            // Distance: geographic on globe (conforms to curvature), screen-space on Mercator
+            let dist: f32 = if let Some(g) = globe {
+                let bx = (px as i32 - area.x as i32) * 2;
+                let by = (py as i32 - area.y as i32) * 4;
+                match g.pixel_to_sphere_point(bx, by) {
+                    None => continue, // outside globe disk
+                    Some(p) => {
+                        let dot = p.dot(center_vec).clamp(-1.0, 1.0);
+                        (dot.acos() * geo_scale) as f32
+                    }
+                }
+            } else {
+                ((dx * dx + dy * dy) as f32).sqrt()
+            };
 
             // Check if this pixel is near any ring
             let mut best_ring: Option<(f32, usize)> = None; // (proximity to ring, ring_index)
@@ -737,7 +814,7 @@ fn render_emp_explosion(exp: &ExplosionRender, x: u16, y: u16, area: Rect, globa
 }
 
 /// Chem: dense dome/sphere expanding in ALL directions — purple palette, dripping
-fn render_chem_explosion(exp: &ExplosionRender, x: u16, y: u16, area: Rect, global_frame: u64, buf: &mut Buffer) {
+fn render_chem_explosion(exp: &ExplosionRender, x: u16, y: u16, area: Rect, global_frame: u64, buf: &mut Buffer, globe: Option<&GlobeViewport>) {
     let progress = if exp.frame < 20 {
         (exp.frame as f32 / 20.0).powf(0.6)
     } else if exp.frame < 40 {
@@ -758,6 +835,14 @@ fn render_chem_explosion(exp: &ExplosionRender, x: u16, y: u16, area: Rect, glob
     let radius_i16 = (exp.radius as f32 * 1.5) as i16;
     let frame_seed_component = global_frame + exp.frame as u64;
 
+    // Globe: geographic → screen distance mapping
+    let center_vec = lonlat_to_vec3(exp.lon, exp.lat);
+    let geo_scale = {
+        let max_angle = exp.radius_km / 6371.0;
+        // Scale maps geographic angle to screen units matching sphere_r_f32
+        (exp.radius as f64 * 1.5) / max_angle
+    };
+
     // Drip zone: extra chars trailing below the sphere
     let drip_extra = (max_r * 0.3) as i16;
 
@@ -770,8 +855,25 @@ fn render_chem_explosion(exp: &ExplosionRender, x: u16, y: u16, area: Rect, glob
         let is_drip_zone = dy > sphere_r;
 
         for dx in -(radius_i16)..=(radius_i16) {
-            let dist_sq = (dx * dx + dy_sq) as f32;
-            let dist = dist_sq.sqrt();
+            // Bounds check (moved up for globe path efficiency)
+            let px_signed = (x as i16) + dx;
+            if px_signed < 0 || px_signed >= (area.x + area.width) as i16 { continue; }
+            let px = px_signed as u16;
+
+            // Distance: geographic on globe, screen-space on Mercator
+            let dist: f32 = if let Some(g) = globe {
+                let bx = (px as i32 - area.x as i32) * 2;
+                let by = (py as i32 - area.y as i32) * 4;
+                match g.pixel_to_sphere_point(bx, by) {
+                    None => continue, // outside globe disk
+                    Some(p) => {
+                        let dot = p.dot(center_vec).clamp(-1.0, 1.0);
+                        (dot.acos() * geo_scale) as f32
+                    }
+                }
+            } else {
+                ((dx * dx + dy_sq) as f32).sqrt()
+            };
 
             // Dense sphere check (less turbulence = more solid fill)
             let turb_seed = hash3(dx as u64, dy as u64, frame_seed_component);
@@ -780,7 +882,7 @@ fn render_chem_explosion(exp: &ExplosionRender, x: u16, y: u16, area: Rect, glob
             let effective_r = sphere_r_f32 * (1.0 + turbulence);
 
             let in_sphere = if is_drip_zone {
-                // Drip effect: narrow vertical trails below sphere
+                // Drip effect: narrow vertical trails below sphere (screen-space)
                 let drip_seed = hash2(dx as u64, global_frame / 3);
                 let drip_chance = (drip_seed & 0x7) < 2; // ~25% of columns drip
                 let drip_progress = (dy - sphere_r) as f32 / drip_extra as f32;
@@ -790,10 +892,6 @@ fn render_chem_explosion(exp: &ExplosionRender, x: u16, y: u16, area: Rect, glob
             };
 
             if in_sphere {
-                let px_signed = (x as i16) + dx;
-                if px_signed < 0 || px_signed >= (area.x + area.width) as i16 { continue; }
-                let px = px_signed as u16;
-
                 let dist_norm = if is_drip_zone {
                     0.8 + 0.2 * ((dy - sphere_r) as f32 / drip_extra.max(1) as f32)
                 } else {

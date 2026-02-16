@@ -360,6 +360,21 @@ impl GlobeViewport {
         self.forward
     }
 
+    /// Reconstruct the 3D unit-sphere point for a braille pixel position.
+    /// Returns None if the pixel is outside the sphere disk.
+    /// Cheaper than `unproject` — skips the asin/atan2 lon-lat conversion.
+    #[inline]
+    pub fn pixel_to_sphere_point(&self, braille_x: i32, braille_y: i32) -> Option<DVec3> {
+        let sx = (braille_x as f64 - self.width as f64 / 2.0) / self.radius;
+        let sy = -(braille_y as f64 - self.height as f64 / 2.0) / self.radius;
+        let r2 = sx * sx + sy * sy;
+        if r2 > 1.0 {
+            return None;
+        }
+        let sz = (1.0 - r2).sqrt();
+        Some(self.right * sx + self.up * sy + self.forward * sz)
+    }
+
     /// Check if a projected point is within the viewport.
     pub fn is_visible(&self, px: i32, py: i32) -> bool {
         px >= -10
