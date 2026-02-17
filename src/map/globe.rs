@@ -19,6 +19,9 @@ pub struct GlobeViewport {
     pub width: usize,
     /// Canvas pixel height
     pub height: usize,
+    // Cached half-dimensions — eliminates division in hot projection loops
+    pub half_w: f64,
+    pub half_h: f64,
 }
 
 impl GlobeViewport {
@@ -34,7 +37,9 @@ impl GlobeViewport {
             lat_rad.sin(),
         );
 
-        let mut globe = Self { forward, right: DVec3::X, up: DVec3::Z, radius, width, height };
+        let half_w = width as f64 / 2.0;
+        let half_h = height as f64 / 2.0;
+        let mut globe = Self { forward, right: DVec3::X, up: DVec3::Z, radius, width, height, half_w, half_h };
         globe.recompute_frame();
         globe
     }
@@ -86,8 +91,8 @@ impl GlobeViewport {
         let sx = p.dot(self.right);
         let sy = p.dot(self.up);
 
-        let px = (self.width as f64 / 2.0 + sx * self.radius) as i32;
-        let py = (self.height as f64 / 2.0 - sy * self.radius) as i32;
+        let px = (self.half_w + sx * self.radius) as i32;
+        let py = (self.half_h - sy * self.radius) as i32;
 
         Some((px, py))
     }
@@ -102,16 +107,16 @@ impl GlobeViewport {
         }
         let sx = p.dot(self.right);
         let sy = p.dot(self.up);
-        let px = (self.width as f64 / 2.0 + sx * self.radius) as i32;
-        let py = (self.height as f64 / 2.0 - sy * self.radius) as i32;
+        let px = (self.half_w + sx * self.radius) as i32;
+        let py = (self.half_h - sy * self.radius) as i32;
         Some((px, py))
     }
 
     /// Unproject screen pixels back to lon/lat.
     /// Returns `None` if the point is outside the sphere disk.
     pub fn unproject(&self, px: i32, py: i32) -> Option<(f64, f64)> {
-        let sx = (px as f64 - self.width as f64 / 2.0) / self.radius;
-        let sy = -(py as f64 - self.height as f64 / 2.0) / self.radius;
+        let sx = (px as f64 - self.half_w) / self.radius;
+        let sy = -(py as f64 - self.half_h) / self.radius;
 
         let r2 = sx * sx + sy * sy;
         if r2 > 1.0 {
@@ -200,8 +205,8 @@ impl GlobeViewport {
             let sx_now = target_vec.dot(self.right);
             let sy_now = target_vec.dot(self.up);
             // Where should it be (in unit-sphere coords)?
-            let sx_want = (px as f64 - self.width as f64 / 2.0) / self.radius;
-            let sy_want = -(py as f64 - self.height as f64 / 2.0) / self.radius;
+            let sx_want = (px as f64 - self.half_w) / self.radius;
+            let sy_want = -(py as f64 - self.half_h) / self.radius;
 
             let dsx = sx_want - sx_now;
             let dsy = sy_want - sy_now;
@@ -342,6 +347,8 @@ impl GlobeViewport {
     pub fn set_size(&mut self, width: usize, height: usize) {
         self.width = width;
         self.height = height;
+        self.half_w = width as f64 / 2.0;
+        self.half_h = height as f64 / 2.0;
     }
 
     /// Get center longitude.
@@ -365,8 +372,8 @@ impl GlobeViewport {
     /// Cheaper than `unproject` — skips the asin/atan2 lon-lat conversion.
     #[inline]
     pub fn pixel_to_sphere_point(&self, braille_x: i32, braille_y: i32) -> Option<DVec3> {
-        let sx = (braille_x as f64 - self.width as f64 / 2.0) / self.radius;
-        let sy = -(braille_y as f64 - self.height as f64 / 2.0) / self.radius;
+        let sx = (braille_x as f64 - self.half_w) / self.radius;
+        let sy = -(braille_y as f64 - self.half_h) / self.radius;
         let r2 = sx * sx + sy * sy;
         if r2 > 1.0 {
             return None;

@@ -18,17 +18,47 @@ pub struct Viewport {
     pub width: usize,
     /// Canvas pixel height
     pub height: usize,
+    // Cached projection constants — recomputed on every state change
+    pub center_x: f64,
+    pub center_y: f64,
+    pub scale: f64,
+    pub half_w: f64,
+    pub half_h: f64,
 }
 
 impl Viewport {
     pub fn new(center_lon: f64, center_lat: f64, zoom: f64, width: usize, height: usize) -> Self {
-        Self {
+        let mut vp = Self {
             center_lon,
             center_lat,
             zoom,
             width,
             height,
-        }
+            center_x: 0.0,
+            center_y: 0.0,
+            scale: 0.0,
+            half_w: 0.0,
+            half_h: 0.0,
+        };
+        vp.recompute_derived();
+        vp
+    }
+
+    /// Recompute cached projection constants from current state.
+    fn recompute_derived(&mut self) {
+        self.center_x = (self.center_lon + 180.0) / 360.0;
+        let center_lat_rad = self.center_lat * PI / 180.0;
+        self.center_y = (1.0 - (center_lat_rad.tan() + 1.0 / center_lat_rad.cos()).ln() / PI) / 2.0;
+        self.scale = self.zoom * self.width as f64;
+        self.half_w = self.width as f64 / 2.0;
+        self.half_h = self.height as f64 / 2.0;
+    }
+
+    /// Set viewport dimensions and recompute derived constants.
+    pub fn set_dimensions(&mut self, width: usize, height: usize) {
+        self.width = width;
+        self.height = height;
+        self.recompute_derived();
     }
 
     /// Create a world view (shows entire world)
@@ -51,16 +81,19 @@ impl Viewport {
 
         // Clamp latitude
         self.center_lat = self.center_lat.clamp(-85.0, 85.0);
+        self.recompute_derived();
     }
 
     /// Zoom in by a factor
     pub fn zoom_in(&mut self) {
         self.zoom = (self.zoom * 1.5).min(100.0);
+        self.recompute_derived();
     }
 
     /// Zoom out by a factor
     pub fn zoom_out(&mut self) {
         self.zoom = (self.zoom / 1.5).max(1.0);
+        self.recompute_derived();
     }
 
     /// Zoom in towards a specific pixel location
@@ -106,24 +139,15 @@ impl Viewport {
         } else if self.center_lon < -180.0 {
             self.center_lon += 360.0;
         }
+        self.recompute_derived();
     }
 
     /// Unproject pixel coordinates back to geographic coordinates (lon, lat)
     pub fn unproject(&self, px: i32, py: i32) -> (f64, f64) {
-        let scale = self.zoom * self.width as f64;
+        let x = (px as f64 - self.half_w) / self.scale + self.center_x;
+        let y = (py as f64 - self.half_h) / self.scale + self.center_y;
 
-        // Reverse the projection math
-        let center_x = (self.center_lon + 180.0) / 360.0;
-        let center_lat_rad = self.center_lat * PI / 180.0;
-        let center_y = (1.0 - (center_lat_rad.tan() + 1.0 / center_lat_rad.cos()).ln() / PI) / 2.0;
-
-        let x = (px as f64 - self.width as f64 / 2.0) / scale + center_x;
-        let y = (py as f64 - self.height as f64 / 2.0) / scale + center_y;
-
-        // Convert from Web Mercator normalized coords back to lon/lat
         let lon = x * 360.0 - 180.0;
-
-        // Inverse Mercator for latitude
         let lat_rad = (PI * (1.0 - 2.0 * y)).sinh().atan();
         let lat = lat_rad * 180.0 / PI;
 
@@ -133,23 +157,14 @@ impl Viewport {
     /// Project with explicit longitude offset (for wrapping)
     /// Returns (pixel_coords, normalized_lon)
     pub fn project_wrapped(&self, lon: f64, lat: f64, lon_offset: f64) -> ((i32, i32), f64) {
-        // Apply wrapping offset
         let wrapped_lon = lon + lon_offset;
 
-        // Web Mercator projection
         let x = (wrapped_lon + 180.0) / 360.0;
         let lat_rad = lat * PI / 180.0;
         let y = (1.0 - (lat_rad.tan() + 1.0 / lat_rad.cos()).ln() / PI) / 2.0;
 
-        // Apply zoom and center offset
-        let center_x = (self.center_lon + 180.0) / 360.0;
-        let center_lat_rad = self.center_lat * PI / 180.0;
-        let center_y = (1.0 - (center_lat_rad.tan() + 1.0 / center_lat_rad.cos()).ln() / PI) / 2.0;
-
-        let scale = self.zoom * self.width as f64;
-
-        let px = ((x - center_x) * scale + self.width as f64 / 2.0) as i32;
-        let py = ((y - center_y) * scale + self.height as f64 / 2.0) as i32;
+        let px = ((x - self.center_x) * self.scale + self.half_w) as i32;
+        let py = ((y - self.center_y) * self.scale + self.half_h) as i32;
 
         ((px, py), wrapped_lon)
     }
@@ -233,8 +248,7 @@ impl Projection {
     pub fn set_size(&mut self, width: usize, height: usize) {
         match self {
             Projection::Mercator(vp) => {
-                vp.width = width;
-                vp.height = height;
+                vp.set_dimensions(width, height);
             }
             Projection::Globe(g) => g.set_size(width, height),
         }

@@ -5,6 +5,7 @@ use crate::geo::{normalize_lat, normalize_lon};
 use crate::map::projection::{Projection, Viewport, WRAP_OFFSETS};
 use crate::map::spatial::{FeatureGrid, SpatialGrid};
 use std::cell::RefCell;
+use std::f64::consts::PI;
 use std::rc::Rc;
 
 /// Rendered map layers with separate canvases for color differentiation.
@@ -111,6 +112,20 @@ fn point_in_polygon(x: f64, y: f64, ring: &[(f64, f64)]) -> bool {
     inside
 }
 
+/// Normalized Mercator X from longitude.
+#[inline(always)]
+fn mercator_x(lon: f64) -> f64 {
+    (lon + 180.0) / 360.0
+}
+
+/// Normalized Mercator Y from latitude (clamped to ±85° to avoid singularity).
+#[inline(always)]
+fn mercator_y(lat: f64) -> f64 {
+    let lat_clamped = lat.clamp(-85.0, 85.0);
+    let lat_rad = lat_clamped * PI / 180.0;
+    (1.0 - (lat_rad.tan() + 1.0 / lat_rad.cos()).ln() / PI) / 2.0
+}
+
 /// A geographic line (sequence of lon/lat coordinates) with precomputed bounding box
 /// and unit-sphere geometry for globe rendering (conservative approximation).
 #[derive(Clone)]
@@ -126,17 +141,34 @@ pub struct LineString {
     /// Feature invisible when center_vec·forward < cull_dot.
     /// Precomputed as -sin(angular_radius + padding).
     cull_dot: f64,
+    /// Precomputed Mercator coordinates — eliminates trig in Mercator hot loop.
+    mercator: Vec<(f64, f64)>,
+    /// Mercator-space bounding box for trig-free bbox early-out.
+    mercator_bbox: (f64, f64, f64, f64),
 }
 
 impl LineString {
     pub fn new(points: Vec<(f64, f64)>) -> Self {
         let (mut min_lon, mut max_lon) = (f64::MAX, f64::MIN);
         let (mut min_lat, mut max_lat) = (f64::MAX, f64::MIN);
+        let (mut merc_min_x, mut merc_max_x) = (f64::MAX, f64::MIN);
+        let (mut merc_min_y, mut merc_max_y) = (f64::MAX, f64::MIN);
+
+        let mut mercator = Vec::with_capacity(points.len());
+
         for &(lon, lat) in &points {
             min_lon = min_lon.min(lon);
             max_lon = max_lon.max(lon);
             min_lat = min_lat.min(lat);
             max_lat = max_lat.max(lat);
+
+            let mx = mercator_x(lon);
+            let my = mercator_y(lat);
+            merc_min_x = merc_min_x.min(mx);
+            merc_max_x = merc_max_x.max(mx);
+            merc_min_y = merc_min_y.min(my);
+            merc_max_y = merc_max_y.max(my);
+            mercator.push((mx, my));
         }
 
         // Phase 1 (blog: "coverage generation"): precompute unit-sphere vectors
@@ -164,6 +196,8 @@ impl LineString {
             vecs,
             center_vec,
             cull_dot,
+            mercator,
+            mercator_bbox: (merc_min_x, merc_min_y, merc_max_x, merc_max_y),
         }
     }
 
@@ -975,12 +1009,18 @@ impl MapRenderer {
         }
     }
 
-    /// Draw a linestring with a longitude offset (for wrapping)
+    /// Draw a linestring with a longitude offset (for wrapping).
+    /// Uses precomputed Mercator coordinates — pure arithmetic, zero trig per vertex.
     fn draw_linestring_with_offset(&self, canvas: &mut BrailleCanvas, line: &LineString, viewport: &Viewport, lon_offset: f64) {
-        // Quick bounding box check using precomputed bbox with offset
-        let (min_lon, min_lat, max_lon, max_lat) = line.bbox;
-        let ((px1, py1), _) = viewport.project_wrapped(min_lon, min_lat, lon_offset);
-        let ((px2, py2), _) = viewport.project_wrapped(max_lon, max_lat, lon_offset);
+        // Mercator X offset for wrapping: {0, -360, 360} → {0.0, -1.0, 1.0}
+        let x_offset = lon_offset / 360.0;
+
+        // Bbox early-out using precomputed Mercator bbox (pure arithmetic, no trig)
+        let (merc_min_x, merc_min_y, merc_max_x, merc_max_y) = line.mercator_bbox;
+        let px1 = ((merc_min_x + x_offset - viewport.center_x) * viewport.scale + viewport.half_w) as i32;
+        let px2 = ((merc_max_x + x_offset - viewport.center_x) * viewport.scale + viewport.half_w) as i32;
+        let py1 = ((merc_min_y - viewport.center_y) * viewport.scale + viewport.half_h) as i32;
+        let py2 = ((merc_max_y - viewport.center_y) * viewport.scale + viewport.half_h) as i32;
         let bb_min_x = px1.min(px2);
         let bb_max_x = px1.max(px2);
         let bb_min_y = py1.min(py2);
@@ -994,8 +1034,9 @@ impl MapRenderer {
 
         let mut prev: Option<(i32, i32)> = None;
 
-        for &(lon, lat) in &line.points {
-            let ((px, py), _) = viewport.project_wrapped(lon, lat, lon_offset);
+        for &(mx, my) in &line.mercator {
+            let px = ((mx + x_offset - viewport.center_x) * viewport.scale + viewport.half_w) as i32;
+            let py = ((my - viewport.center_y) * viewport.scale + viewport.half_h) as i32;
 
             if let Some((prev_x, prev_y)) = prev {
                 // Skip drawing if jump is too large (crossing date line within this offset)
