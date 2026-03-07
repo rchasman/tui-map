@@ -312,6 +312,21 @@ fn bench_land_grid(c: &mut Criterion) {
         });
     });
 
+    group.bench_function("land_fraction_10k_mixed_edge", |b| {
+        b.iter(|| {
+            for &(lon, lat) in &mixed_points {
+                black_box(grid.land_fraction(lon, lat));
+            }
+        });
+    });
+
+    // Build time: scanline rasterization (bypasses disk cache)
+    group.bench_function("build_scanline_3_rects", |b| {
+        b.iter(|| {
+            black_box(LandGrid::build_scanline(&polygons));
+        });
+    });
+
     group.finish();
 }
 
@@ -617,6 +632,46 @@ fn bench_real_data_render(c: &mut Criterion) {
                 }
             });
         });
+
+        group.bench_function("land_fraction_10k_us_coast", |b| {
+            b.iter(|| {
+                for &(lon, lat) in &coast_points {
+                    black_box(renderer.land_fraction(lon, lat));
+                }
+            });
+        });
+
+        group.finish();
+    }
+
+    // Benchmark land grid build time with real polygons (bypasses disk cache)
+    {
+        let mut group = c.benchmark_group("real_land_grid_build");
+        group.sample_size(10);
+
+        if !renderer.land_polygons_low.is_empty() {
+            group.bench_function("scanline_low", |b| {
+                b.iter(|| {
+                    black_box(LandGrid::build_scanline(&renderer.land_polygons_low));
+                });
+            });
+        }
+
+        if !renderer.land_polygons_medium.is_empty() {
+            group.bench_function("scanline_medium", |b| {
+                b.iter(|| {
+                    black_box(LandGrid::build_scanline(&renderer.land_polygons_medium));
+                });
+            });
+        }
+
+        if !renderer.land_polygons_high.is_empty() {
+            group.bench_function("scanline_high", |b| {
+                b.iter(|| {
+                    black_box(LandGrid::build_scanline(&renderer.land_polygons_high));
+                });
+            });
+        }
 
         group.finish();
     }

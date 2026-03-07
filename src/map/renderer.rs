@@ -57,58 +57,6 @@ impl Polygon {
         }
     }
 
-    /// Check if a point is inside this polygon using ray casting algorithm
-    pub fn contains(&self, lon: f64, lat: f64) -> bool {
-        // Quick bbox check first
-        if lon < self.bbox.0 || lon > self.bbox.2 || lat < self.bbox.1 || lat > self.bbox.3 {
-            return false;
-        }
-
-        if self.rings.is_empty() {
-            return false;
-        }
-
-        // Check if point is in exterior ring
-        let in_exterior = point_in_polygon(lon, lat, &self.rings[0]);
-
-        if !in_exterior {
-            return false;
-        }
-
-        // Check if point is in any hole (if so, it's not in the polygon)
-        for hole in &self.rings[1..] {
-            if point_in_polygon(lon, lat, hole) {
-                return false;
-            }
-        }
-
-        true
-    }
-}
-
-/// Ray casting algorithm for point-in-polygon test
-fn point_in_polygon(x: f64, y: f64, ring: &[(f64, f64)]) -> bool {
-    let mut inside = false;
-    let n = ring.len();
-
-    if n < 3 {
-        return false;
-    }
-
-    let mut j = n - 1;
-    for i in 0..n {
-        let xi = ring[i].0;
-        let yi = ring[i].1;
-        let xj = ring[j].0;
-        let yj = ring[j].1;
-
-        if ((yi > y) != (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi) {
-            inside = !inside;
-        }
-        j = i;
-    }
-
-    inside
 }
 
 /// A geographic line (sequence of lon/lat coordinates) with precomputed bounding box
@@ -339,13 +287,14 @@ pub struct LandGrid {
 }
 
 impl LandGrid {
-    const WIDTH: usize = 3600;       // 360° / RESOLUTION
-    const HEIGHT: usize = 1800;      // 180° / RESOLUTION
-    const RESOLUTION: f64 = 0.1;     // Fine tier: 0.1° per cell
-    #[allow(dead_code)]
-    const COARSE_RES: f64 = 1.0;     // Coarse tier: 1° per cell (10×10 fine cells)
-    const TOTAL_BITS: usize = Self::WIDTH * Self::HEIGHT; // 6,480,000
-    const BITMAP_LEN: usize = (Self::TOTAL_BITS + 63) / 64; // 101,250 u64s = 810KB
+    const WIDTH: usize = 14400;      // 360° / RESOLUTION
+    const HEIGHT: usize = 7200;      // 180° / RESOLUTION
+    const RESOLUTION: f64 = 0.025;   // Fine tier: 0.025° per cell (~2.8km)
+    const COARSE_RATIO: usize = 40;  // Fine cells per coarse cell (1° / 0.025°)
+    const TOTAL_BITS: usize = Self::WIDTH * Self::HEIGHT; // 103,680,000
+    const BITMAP_LEN: usize = (Self::TOTAL_BITS + 63) / 64; // ~12.3MB
+    /// Cache format version — bump when resolution or layout changes
+    const CACHE_VERSION: u32 = 1;
 
     pub fn new() -> Self {
         Self {
@@ -354,26 +303,28 @@ impl LandGrid {
         }
     }
 
-    /// Build coarse 1° tier from fine 0.1° bitmap.
-    /// Each 1° cell covers 10×10 fine cells; classified as
+    /// Build coarse 1° tier from fine bitmap.
+    /// Each 1° cell covers COARSE_RATIO×COARSE_RATIO fine cells; classified as
     /// all-water (0), mixed (1), or all-land (2).
     fn build_coarse(&mut self) {
+        let r = Self::COARSE_RATIO;
+        let all_land = r * r;
         self.coarse = vec![0u8; 360 * 180];
         for coarse_lat in 0..180usize {
             for coarse_lon in 0..360usize {
-                let fine_lat_start = coarse_lat * 10;
-                let fine_lon_start = coarse_lon * 10;
-                let land_count = (0..10usize).flat_map(|fl| {
-                    (0..10usize).map(move |fc| (fl, fc))
+                let fine_lat_start = coarse_lat * r;
+                let fine_lon_start = coarse_lon * r;
+                let land_count = (0..r).flat_map(|fl| {
+                    (0..r).map(move |fc| (fl, fc))
                 }).filter(|&(fl, fc)| {
                     let fine_idx = (fine_lat_start + fl) * Self::WIDTH + (fine_lon_start + fc);
                     self.get_bit(fine_idx)
                 }).count();
 
                 self.coarse[coarse_lat * 360 + coarse_lon] = match land_count {
-                    0 => 0,     // all water
-                    100 => 2,   // all land
-                    _ => 1,     // mixed - needs fine check
+                    0 => 0,              // all water
+                    n if n == all_land => 2, // all land
+                    _ => 1,              // mixed - needs fine check
                 };
             }
         }
@@ -388,30 +339,98 @@ impl LandGrid {
         }
     }
 
-    /// Precompute land grid from polygons in parallel (call once at startup).
-    /// Each rayon thread builds a local bitmap for its polygon chunk,
-    /// then bitmaps are merged with bitwise OR.
+    /// Cache file path keyed by version, polygon count, and total vertex count.
+    fn cache_path(poly_count: usize, total_verts: usize) -> std::path::PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!("tui_map_land_v{}_p{}_e{}.bin",
+            Self::CACHE_VERSION, poly_count, total_verts));
+        path
+    }
+
+    /// Try loading a pre-built grid from disk cache.
+    fn try_load_cache(path: &std::path::Path) -> Option<Self> {
+        let data = std::fs::read(path).ok()?;
+        let expected = Self::BITMAP_LEN * 8 + 360 * 180;
+        if data.len() != expected { return None; }
+
+        let bitmap: Vec<u64> = data[..Self::BITMAP_LEN * 8]
+            .chunks_exact(8)
+            .map(|c| u64::from_le_bytes(c.try_into().unwrap()))
+            .collect();
+        let coarse = data[Self::BITMAP_LEN * 8..].to_vec();
+
+        Some(Self { bitmap, coarse })
+    }
+
+    /// Save grid to disk cache for instant subsequent loads.
+    fn save_cache(&self, path: &std::path::Path) {
+        let mut data = Vec::with_capacity(Self::BITMAP_LEN * 8 + 360 * 180);
+        for &word in &self.bitmap {
+            data.extend_from_slice(&word.to_le_bytes());
+        }
+        data.extend_from_slice(&self.coarse);
+        let _ = std::fs::write(path, &data);
+    }
+
+    /// Build land grid: loads from disk cache if available, otherwise
+    /// builds via scanline rasterization and caches for next startup.
     pub fn from_polygons(polygons: &[Polygon]) -> Self {
+        let total_verts: usize = polygons.iter()
+            .map(|p| p.rings.iter().map(|r| r.len()).sum::<usize>())
+            .sum();
+        let cache = Self::cache_path(polygons.len(), total_verts);
+
+        if let Some(grid) = Self::try_load_cache(&cache) {
+            return grid;
+        }
+
+        let grid = Self::build_scanline(polygons);
+        grid.save_cache(&cache);
+        grid
+    }
+
+    /// Scanline rasterization: for each row, compute edge crossings once
+    /// then fill spans between pairs (even-odd rule). O(rows × edges)
+    /// vs old brute-force O(cells × edges). Parallelized with rayon.
+    pub fn build_scanline(polygons: &[Polygon]) -> Self {
         use rayon::prelude::*;
 
-        // Each chunk produces a local bitmap; merge via bitwise OR
         let chunk_size = (polygons.len() / rayon::current_num_threads().max(1)).max(1);
         let sub_bitmaps: Vec<Vec<u64>> = polygons.par_chunks(chunk_size)
             .map(|chunk| {
                 let mut bitmap = vec![0u64; Self::BITMAP_LEN];
+                let mut crossings = Vec::new();
                 for polygon in chunk {
-                    let (min_lon, min_lat, max_lon, max_lat) = polygon.bbox;
-                    let lon_start = (((min_lon + 180.0) / Self::RESOLUTION).floor() as usize).saturating_sub(1);
-                    let lon_end = (((max_lon + 180.0) / Self::RESOLUTION).ceil() as usize + 1).min(Self::WIDTH);
+                    let (_, min_lat, _, max_lat) = polygon.bbox;
                     let lat_start = (((min_lat + 90.0) / Self::RESOLUTION).floor() as usize).saturating_sub(1);
                     let lat_end = (((max_lat + 90.0) / Self::RESOLUTION).ceil() as usize + 1).min(Self::HEIGHT);
 
                     for lat_idx in lat_start..lat_end {
                         let lat = -90.0 + (lat_idx as f64 + 0.5) * Self::RESOLUTION;
-                        for lon_idx in lon_start..lon_end {
-                            let lon = -180.0 + (lon_idx as f64 + 0.5) * Self::RESOLUTION;
-                            if polygon.contains(lon, lat) {
-                                let idx = lat_idx * Self::WIDTH + lon_idx;
+
+                        crossings.clear();
+                        for ring in &polygon.rings {
+                            let n = ring.len();
+                            if n < 3 { continue; }
+                            for i in 0..n {
+                                let j = if i + 1 < n { i + 1 } else { 0 };
+                                let (x1, y1) = ring[i];
+                                let (x2, y2) = ring[j];
+                                if (y1 <= lat && y2 > lat) || (y2 <= lat && y1 > lat) {
+                                    let t = (lat - y1) / (y2 - y1);
+                                    crossings.push(x1 + t * (x2 - x1));
+                                }
+                            }
+                        }
+
+                        crossings.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+                        for pair in crossings.chunks_exact(2) {
+                            let col_start = ((pair[0] + 180.0) / Self::RESOLUTION).ceil() as usize;
+                            let col_end = (((pair[1] + 180.0) / Self::RESOLUTION).floor() as usize + 1).min(Self::WIDTH);
+                            let row_base = lat_idx * Self::WIDTH;
+                            for lon_idx in col_start..col_end {
+                                let idx = row_base + lon_idx;
                                 if idx < Self::TOTAL_BITS {
                                     bitmap[idx / 64] |= 1u64 << (idx % 64);
                                 }
@@ -423,7 +442,6 @@ impl LandGrid {
             })
             .collect();
 
-        // Merge sub-bitmaps into final grid
         let mut grid = Self::new();
         for sub in sub_bitmaps {
             for (i, bits) in sub.iter().enumerate() {
@@ -435,8 +453,36 @@ impl LandGrid {
         grid
     }
 
+    /// Smooth land fraction using bilinear interpolation of the 4 neighboring
+    /// fine-grid cell centers. Returns 0.0 (water) to 1.0 (land).
+    /// At high zoom, this softens fire boundaries at coastlines.
+    #[inline(always)]
+    pub fn land_fraction(&self, lon: f64, lat: f64) -> f64 {
+        let fx = normalize_lon(lon) / Self::RESOLUTION;
+        let fy = normalize_lat(lat) / Self::RESOLUTION;
+
+        let x0f = (fx - 0.5).floor();
+        let y0f = (fy - 0.5).floor();
+        let x0 = (x0f as usize).min(Self::WIDTH - 1);
+        let y0 = (y0f as usize).min(Self::HEIGHT - 1);
+        let x1 = (x0 + 1).min(Self::WIDTH - 1);
+        let y1 = (y0 + 1).min(Self::HEIGHT - 1);
+
+        let tx = fx - 0.5 - x0f;
+        let ty = fy - 0.5 - y0f;
+
+        let c00 = self.get_bit(y0 * Self::WIDTH + x0) as u8 as f64;
+        let c10 = self.get_bit(y0 * Self::WIDTH + x1) as u8 as f64;
+        let c01 = self.get_bit(y1 * Self::WIDTH + x0) as u8 as f64;
+        let c11 = self.get_bit(y1 * Self::WIDTH + x1) as u8 as f64;
+
+        let top = c00 * (1.0 - tx) + c10 * tx;
+        let bot = c01 * (1.0 - tx) + c11 * tx;
+        top * (1.0 - ty) + bot * ty
+    }
+
     /// Two-phase land check: coarse 1° tier short-circuits for deep
-    /// ocean/inland, fine 0.1° tier resolves coastal cells.
+    /// ocean/inland, fine 0.025° tier resolves coastal cells.
     #[inline(always)]
     pub fn is_land(&self, lon: f64, lat: f64) -> bool {
         // Phase 1: Coarse 1° check
@@ -448,7 +494,7 @@ impl LandGrid {
             0 => false, // all water - skip fine check
             2 => true,  // all land - skip fine check
             _ => {
-                // Phase 2: Fine 0.1° check (coastal cells only)
+                // Phase 2: Fine 0.025° check (coastal cells only)
                 let lon_idx = (normalize_lon(lon) / Self::RESOLUTION) as usize;
                 let lat_idx = (normalize_lat(lat) / Self::RESOLUTION) as usize;
                 let idx = lat_idx.min(Self::HEIGHT - 1) * Self::WIDTH + lon_idx.min(Self::WIDTH - 1);
@@ -1208,13 +1254,15 @@ impl MapRenderer {
         }
     }
 
-    /// Build fast land/water lookup grid (call after loading all polygons)
+    /// Build fast land/water lookup grid (call after loading all polygons).
+    /// Uses best available polygons; disk-cached for instant subsequent startups.
     pub fn build_land_grid(&mut self) {
-        // Use lowest resolution for grid building (faster, good enough for fire filtering)
-        if !self.land_polygons_low.is_empty() {
-            self.land_grid = Some(LandGrid::from_polygons(&self.land_polygons_low));
+        if !self.land_polygons_high.is_empty() {
+            self.land_grid = Some(LandGrid::from_polygons(&self.land_polygons_high));
         } else if !self.land_polygons_medium.is_empty() {
             self.land_grid = Some(LandGrid::from_polygons(&self.land_polygons_medium));
+        } else if !self.land_polygons_low.is_empty() {
+            self.land_grid = Some(LandGrid::from_polygons(&self.land_polygons_low));
         }
     }
 
@@ -1224,8 +1272,18 @@ impl MapRenderer {
         if let Some(ref grid) = self.land_grid {
             grid.is_land(lon, lat)
         } else {
-            // Fallback: assume land if no grid available
             true
+        }
+    }
+
+    /// Smooth land fraction (0.0–1.0) via bilinear interpolation.
+    /// Used at high zoom to fade fires near coastlines.
+    #[inline(always)]
+    pub fn land_fraction(&self, lon: f64, lat: f64) -> f64 {
+        if let Some(ref grid) = self.land_grid {
+            grid.land_fraction(lon, lat)
+        } else {
+            1.0
         }
     }
 

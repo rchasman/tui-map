@@ -223,15 +223,36 @@ fn render_map(frame: &mut Frame, app: &mut App, area: Rect) {
         }
     };
 
-    // Hierarchical fire rendering based on zoom
+    // Hierarchical fire rendering based on zoom:
+    // - Coarse grid (1°) for zoomed-out views
+    // - Fine grid (0.25°) for medium zoom
+    // - Individual fires for high zoom (avoids blocky grid artifacts)
     let deg_per_char = 360.0 / (zoom * inner.width as f64);
 
-    {
+    if deg_per_char < 0.25 {
+        // High zoom: render individual fires for organic, scattered appearance.
+        // Bilinear land_fraction fades intensity near coastlines to avoid the
+        // bitmap staircase from the land grid.
+        for fire in &app.fires {
+            if fire.lat < vp_min_lat || fire.lat > vp_max_lat {
+                continue;
+            }
+            if let Some((px, py)) = projection.project_point(fire.lon, fire.lat) {
+                let cx = px / 2;
+                let cy = py / 4;
+                if cx >= 0 && cy >= 0 {
+                    let frac = app.map_renderer.land_fraction(fire.lon, fire.lat);
+                    let intensity = (fire.intensity as f64 * frac) as u8;
+                    if intensity > 0 {
+                        add_fire(cx as usize, cy as usize, intensity, fire.weapon_type);
+                    }
+                }
+            }
+        }
+    } else {
         let grid = if deg_per_char >= 1.0 { &app.fire_grid } else { &app.fire_grid_fine };
         let res = grid.resolution;
 
-        // Compute cell fill padding ONCE per frame to prevent gaps at high zoom.
-        // When grid cells span > 1 char, we fill a rect around each center.
         let cell_dots_h = projection.deg_to_pixels(res);
         let pad_x = ((cell_dots_h / 2.0 - 1.0) / 2.0).max(0.0).ceil() as i32;
 
