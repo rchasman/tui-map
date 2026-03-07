@@ -302,14 +302,14 @@ struct RenderCacheKey {
 }
 
 impl RenderCacheKey {
-    fn from_projection(projection: &Projection, width: usize, height: usize, settings: &DisplaySettings) -> Self {
+    fn new(center_lon: f64, center_lat: f64, zoom: f64, is_globe: bool, width: usize, height: usize, settings: &DisplaySettings) -> Self {
         Self {
             width,
             height,
-            center_lon: (projection.center_lon() * 1000.0) as i64,
-            center_lat: (projection.center_lat() * 1000.0) as i64,
-            zoom: (projection.effective_zoom() * 100.0) as i64,
-            is_globe: matches!(projection, Projection::Globe(_)),
+            center_lon: (center_lon * 1000.0) as i64,
+            center_lat: (center_lat * 1000.0) as i64,
+            zoom: (zoom * 100.0) as i64,
+            is_globe,
             show_coastlines: settings.show_coastlines,
             show_borders: settings.show_borders,
             show_states: settings.show_states,
@@ -586,19 +586,32 @@ impl MapRenderer {
     }
 
     /// Query a FeatureGrid with date-line wrapping support.
-    /// Returns deduplicated feature indices.
+    /// Returns deduplicated feature indices using O(n) bitset instead of O(n log n) sort.
     fn query_grid_wrapped(grid: &FeatureGrid, min_lon: f64, min_lat: f64, max_lon: f64, max_lat: f64) -> Vec<usize> {
-        let mut candidates = Vec::new();
-        grid.query_into(min_lon.max(-180.0), min_lat, max_lon.min(180.0), max_lat, &mut candidates);
+        let mut raw = Vec::new();
+        grid.query_into(min_lon.max(-180.0), min_lat, max_lon.min(180.0), max_lat, &mut raw);
         if min_lon < -180.0 {
-            grid.query_into(min_lon + 360.0, min_lat, 180.0, max_lat, &mut candidates);
+            grid.query_into(min_lon + 360.0, min_lat, 180.0, max_lat, &mut raw);
         }
         if max_lon > 180.0 {
-            grid.query_into(-180.0, min_lat, max_lon - 360.0, max_lat, &mut candidates);
+            grid.query_into(-180.0, min_lat, max_lon - 360.0, max_lat, &mut raw);
         }
-        candidates.sort_unstable();
-        candidates.dedup();
-        candidates
+        // O(n) dedup via bitset — each feature index is dense in [0, num_features)
+        let n = grid.num_features();
+        if n == 0 {
+            return raw;
+        }
+        let mut seen = vec![0u64; (n + 63) / 64];
+        let mut unique = Vec::with_capacity(raw.len().min(n));
+        for idx in raw {
+            let word = idx / 64;
+            let bit = 1u64 << (idx % 64);
+            if seen[word] & bit == 0 {
+                seen[word] |= bit;
+                unique.push(idx);
+            }
+        }
+        unique
     }
 
     /// Build spatial indexes for all feature collections in parallel.
@@ -686,8 +699,11 @@ impl MapRenderer {
         let fg_min_lat = (vp_min_lat - pad).max(-90.0);
         let fg_max_lat = (vp_max_lat + pad).min(90.0);
 
+        // Compute wrap offsets once per frame — skip ±360 when viewport doesn't cross dateline
+        let offsets = Self::needed_wrap_offsets(vp_min_lon, vp_max_lon);
+
         // Check if we can use cached static layers
-        let cache_key = RenderCacheKey::from_projection(&Projection::Mercator(viewport.clone()), width, height, &self.settings);
+        let cache_key = RenderCacheKey::new(viewport.center_lon, viewport.center_lat, viewport.zoom, false, width, height, &self.settings);
         let cache_borrow = self.cache.borrow();
         let use_cache = cache_borrow.as_ref().map(|c| c.key == cache_key).unwrap_or(false);
 
@@ -713,7 +729,7 @@ impl MapRenderer {
                 let grid = self.get_coastline_grid(lod);
                 let candidates = Self::query_grid_wrapped(grid, fg_min_lon, fg_min_lat, fg_max_lon, fg_max_lat);
                 for &idx in &candidates {
-                    self.draw_linestring(&mut coastlines_canvas, &coastlines[idx], viewport);
+                    self.draw_linestring(&mut coastlines_canvas, &coastlines[idx], viewport, offsets);
                 }
             }
 
@@ -722,20 +738,20 @@ impl MapRenderer {
                 let grid = self.get_border_grid(lod);
                 let candidates = Self::query_grid_wrapped(grid, fg_min_lon, fg_min_lat, fg_max_lon, fg_max_lat);
                 for &idx in &candidates {
-                    self.draw_linestring(&mut borders_canvas, &borders[idx], viewport);
+                    self.draw_linestring(&mut borders_canvas, &borders[idx], viewport, offsets);
                 }
 
                 if self.settings.show_states && viewport.zoom >= 4.0 {
                     let candidates = Self::query_grid_wrapped(&self.state_grid, fg_min_lon, fg_min_lat, fg_max_lon, fg_max_lat);
                     for &idx in &candidates {
-                        self.draw_linestring(&mut states_canvas, &self.states[idx], viewport);
+                        self.draw_linestring(&mut states_canvas, &self.states[idx], viewport, offsets);
                     }
                 }
 
                 if self.settings.show_counties && viewport.zoom >= 7.0 {
                     let candidates = Self::query_grid_wrapped(&self.county_grid, fg_min_lon, fg_min_lat, fg_max_lon, fg_max_lat);
                     for &idx in &candidates {
-                        self.draw_linestring(&mut counties_canvas, &self.counties[idx], viewport);
+                        self.draw_linestring(&mut counties_canvas, &self.counties[idx], viewport, offsets);
                     }
                 }
             }
@@ -821,7 +837,7 @@ impl MapRenderer {
         let fg_max_lat = (vp_max_lat + pad).min(90.0);
 
         // Check cache
-        let cache_key = RenderCacheKey::from_projection(&Projection::Globe(globe.clone()), width, height, &self.settings);
+        let cache_key = RenderCacheKey::new(globe.center_lon(), globe.center_lat(), globe.effective_zoom(), true, width, height, &self.settings);
         let cache_borrow = self.cache.borrow();
         let use_cache = cache_borrow.as_ref().map(|c| c.key == cache_key).unwrap_or(false);
 
@@ -1006,15 +1022,26 @@ impl MapRenderer {
         }
     }
 
+    /// Compute which wrap offsets are needed for this viewport.
+    /// Offset 0 always needed; ±360 only when viewport crosses the dateline.
+    fn needed_wrap_offsets(vp_min_lon: f64, vp_max_lon: f64) -> &'static [f64] {
+        let needs_neg = vp_max_lon > 180.0;  // viewport wraps east → need -360
+        let needs_pos = vp_min_lon < -180.0;  // viewport wraps west → need +360
+        match (needs_neg, needs_pos) {
+            (true, true) => &[0.0, -360.0, 360.0],
+            (true, false) => &[0.0, -360.0],
+            (false, true) => &[0.0, 360.0],
+            (false, false) => &[0.0],
+        }
+    }
+
     /// Draw a linestring with viewport culling and world wrapping
-    fn draw_linestring(&self, canvas: &mut BrailleCanvas, line: &LineString, viewport: &Viewport) {
+    fn draw_linestring(&self, canvas: &mut BrailleCanvas, line: &LineString, viewport: &Viewport, offsets: &[f64]) {
         if line.len() < 2 {
             return;
         }
 
-        // Draw the linestring at its normal position and potentially wrapped
-        // This handles the case where the viewport crosses the date line
-        for &lon_offset in &WRAP_OFFSETS {
+        for &lon_offset in offsets {
             self.draw_linestring_with_offset(canvas, line, viewport, lon_offset);
         }
     }

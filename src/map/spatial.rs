@@ -108,6 +108,7 @@ pub struct FeatureGrid {
     cell_size: f64,
     lon_cells: usize,
     lat_cells: usize,
+    num_features: usize,
 }
 
 impl FeatureGrid {
@@ -119,6 +120,7 @@ impl FeatureGrid {
             cell_size,
             lon_cells,
             lat_cells,
+            num_features: 0,
         }
     }
 
@@ -139,6 +141,7 @@ impl FeatureGrid {
     /// each feature inserted into every cell its bbox overlaps)
     pub fn build(bboxes: impl Iterator<Item = (f64, f64, f64, f64)>, cell_size: f64) -> Self {
         let mut grid = Self::new(cell_size);
+        let mut count = 0usize;
         for (idx, (min_lon, min_lat, max_lon, max_lat)) in bboxes.enumerate() {
             let min_cell = to_cell(min_lon, min_lat, cell_size);
             let max_cell = to_cell(max_lon, max_lat, cell_size);
@@ -149,8 +152,14 @@ impl FeatureGrid {
                     }
                 }
             }
+            count = idx + 1;
         }
+        grid.num_features = count;
         grid
+    }
+
+    pub fn num_features(&self) -> usize {
+        self.num_features
     }
 
     /// Append feature indices for the given bounds into results vec.
