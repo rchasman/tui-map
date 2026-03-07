@@ -191,21 +191,24 @@ fn bench_feature_grid(c: &mut Criterion) {
         });
     }
 
-    // query_grid_wrapped pattern (replicates the MapRenderer static method)
-    group.bench_function("query_wrapped_continental", |b| {
+    // query_grid_wrapped pattern — bitset dedup (current implementation)
+    group.bench_function("query_wrapped_continental_bitset", |b| {
         b.iter(|| {
             let (min_lon, min_lat, max_lon, max_lat): (f64, f64, f64, f64) = (-30.0, 30.0, 60.0, 70.0);
-            let mut candidates = Vec::new();
-            grid.query_into(min_lon.max(-180.0), min_lat, max_lon.min(180.0), max_lat, &mut candidates);
-            if min_lon < -180.0 {
-                grid.query_into(min_lon + 360.0, min_lat, 180.0, max_lat, &mut candidates);
+            let mut raw = Vec::new();
+            grid.query_into(min_lon.max(-180.0), min_lat, max_lon.min(180.0), max_lat, &mut raw);
+            let n = grid.num_features();
+            let mut seen = vec![0u64; (n + 63) / 64];
+            let mut unique = Vec::with_capacity(raw.len().min(n));
+            for idx in raw {
+                let word = idx / 64;
+                let bit = 1u64 << (idx % 64);
+                if seen[word] & bit == 0 {
+                    seen[word] |= bit;
+                    unique.push(idx);
+                }
             }
-            if max_lon > 180.0 {
-                grid.query_into(-180.0, min_lat, max_lon - 360.0, max_lat, &mut candidates);
-            }
-            candidates.sort_unstable();
-            candidates.dedup();
-            black_box(&candidates);
+            black_box(&unique);
         });
     });
 
