@@ -193,38 +193,32 @@ impl GlobeViewport {
         // Get geo coords under cursor before zoom
         let target = self.unproject(px, py);
 
-        // Apply zoom
+        // Apply zoom — bail if clamped (no actual change)
         let min_r = self.width as f64 * 0.35;
         let max_r = self.width as f64 * 35.0;
+        let old_radius = self.radius;
         self.radius = (self.radius * factor).clamp(min_r, max_r);
+        if self.radius == old_radius { return; }
 
-        // Re-orient so the same geo point stays under cursor
+        // Re-orient so the same geo point stays under cursor.
+        // Solve: find forward such that target_vec = right*sx + up*sy + forward*sz
+        // where (sx, sy) is the desired screen position in unit-sphere coords.
+        // Since right/up depend on forward via recompute_frame, iterate to convergence.
         if let Some((lon, lat)) = target {
             let target_vec = lonlat_to_vec3(lon, lat);
-            // Where does this point project now?
-            let sx_now = target_vec.dot(self.right);
-            let sy_now = target_vec.dot(self.up);
-            // Where should it be (in unit-sphere coords)?
-            let sx_want = (px as f64 - self.half_w) / self.radius;
-            let sy_want = -(py as f64 - self.half_h) / self.radius;
+            let sx = (px as f64 - self.half_w) / self.radius;
+            let sy = -(py as f64 - self.half_h) / self.radius;
+            let r2 = sx * sx + sy * sy;
+            if r2 >= 1.0 { return; }
 
-            let dsx = sx_want - sx_now;
-            let dsy = sy_want - sy_now;
-
-            // Apply small rotation to re-center
-            let angle_x = -dsx;
-            let angle_y = dsy;
-
-            if angle_x.abs() > 1e-10 {
-                let (sin_a, cos_a) = angle_x.sin_cos();
-                self.forward = (self.forward * cos_a + self.right * sin_a).normalize();
-            }
-            if angle_y.abs() > 1e-10 {
-                let (sin_a, cos_a) = angle_y.sin_cos();
-                self.forward = (self.forward * cos_a + self.up * sin_a).normalize();
-            }
-
+            // Seed with target at center, then iterate
+            self.forward = target_vec;
             self.recompute_frame();
+
+            for _ in 0..3 {
+                self.forward = (target_vec - self.right * sx - self.up * sy).normalize();
+                self.recompute_frame();
+            }
         }
     }
 

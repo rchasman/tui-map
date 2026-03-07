@@ -123,8 +123,9 @@ impl Viewport {
         // Get the geographic coordinates under the mouse BEFORE zoom
         let (target_lon, target_lat) = self.unproject(px, py);
 
-        // Apply the zoom
+        // Apply the zoom — bail if clamped (no actual change)
         let new_zoom = (self.zoom * factor).clamp(1.0, 100.0);
+        if new_zoom == self.zoom { return; }
         self.zoom = new_zoom;
 
         // Directly calculate the center needed to keep target point at (px, py)
