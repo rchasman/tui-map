@@ -1,157 +1,92 @@
-use crate::map::{Lod, MapRenderer};
+use crate::map::{LineString, Lod, MapRenderer};
 use anyhow::Result;
 use geojson::{GeoJson, Geometry, Value};
+use rayon::prelude::*;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-/// Load all available Natural Earth GeoJSON data into the map renderer
-pub fn load_all_geojson(renderer: &mut MapRenderer, data_dir: &Path) -> Result<()> {
-    // Load coastlines at each resolution
-    let coastline_files = [
-        ("ne_110m_coastline.json", Lod::Low),
-        ("natural-earth.json", Lod::Medium),
-        ("ne_50m_coastline.json", Lod::Medium),
-        ("ne_10m_coastline.json", Lod::High),
-    ];
-
-    for (filename, lod) in coastline_files {
-        let path = data_dir.join(filename);
-        if path.exists() {
-            if let Err(e) = load_coastlines(renderer, &path, lod) {
-                eprintln!("Warning: Failed to load {}: {}", filename, e);
-            }
-        }
-    }
-
-    // Load borders
-    let border_files = [
-        ("ne_50m_borders.json", Lod::Medium),
-        ("ne_10m_borders.json", Lod::High),
-    ];
-
-    for (filename, lod) in border_files {
-        let path = data_dir.join(filename);
-        if path.exists() {
-            if let Err(e) = load_borders(renderer, &path, lod) {
-                eprintln!("Warning: Failed to load {}: {}", filename, e);
-            }
-        }
-    }
-
-    // Load state/province borders
-    let states_path = data_dir.join("ne_10m_states.json");
-    if states_path.exists() {
-        if let Err(e) = load_states(renderer, &states_path) {
-            eprintln!("Warning: Failed to load states: {}", e);
-        }
-    }
-
-    // Load county borders (Natural Earth US counties)
-    let counties_path = data_dir.join("ne_10m_admin_2_counties.json");
-    if counties_path.exists() {
-        if let Err(e) = load_counties(renderer, &counties_path) {
-            eprintln!("Warning: Failed to load counties: {}", e);
-        }
-    }
-
-    // Load all GADM admin level 2 data (global counties/districts)
-    if let Ok(entries) = fs::read_dir(data_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                if name.starts_with("gadm41_") && name.ends_with("_2.json") {
-                    if let Err(e) = load_counties(renderer, &path) {
-                        eprintln!("Warning: Failed to load {}: {}", name, e);
-                    }
-                }
-            }
-        }
-    }
-
-    // Load cities
-    let cities_path = data_dir.join("ne_10m_cities.json");
-    if cities_path.exists() {
-        if let Err(e) = load_cities(renderer, &cities_path) {
-            eprintln!("Warning: Failed to load cities: {}", e);
-        }
-    }
-
-    // Load land polygons for accurate land/water detection
-    let land_files = [
-        ("ne_110m_land.json", Lod::Low),
-        ("ne_50m_land.json", Lod::Medium),
-        ("ne_10m_land.json", Lod::High),
-    ];
-
-    for (filename, lod) in land_files {
-        let path = data_dir.join(filename);
-        if path.exists() {
-            if let Err(e) = load_land_polygons(renderer, &path, lod) {
-                eprintln!("Warning: Failed to load {}: {}", filename, e);
-            }
-        }
-    }
-
-    Ok(())
+/// Parse GeoJSON using SIMD-accelerated JSON parsing
+fn parse_geojson(content: String) -> Result<GeoJson> {
+    let mut bytes = content.into_bytes();
+    Ok(simd_json::serde::from_slice(&mut bytes)?)
 }
 
-/// Load coastline GeoJSON data
-fn load_coastlines(renderer: &mut MapRenderer, path: &Path, lod: Lod) -> Result<()> {
-    let content = fs::read_to_string(path)?;
-    let geojson: GeoJson = content.parse()?;
-    process_geojson_lines(&geojson, |line| renderer.add_coastline(line, lod));
-    Ok(())
+/// Intermediate city data extracted during parallel parsing
+struct CityData {
+    lon: f64,
+    lat: f64,
+    name: String,
+    population: u64,
+    is_capital: bool,
+    is_megacity: bool,
 }
 
-/// Load border GeoJSON data
-fn load_borders(renderer: &mut MapRenderer, path: &Path, lod: Lod) -> Result<()> {
-    let content = fs::read_to_string(path)?;
-    let geojson: GeoJson = content.parse()?;
-    process_geojson_lines(&geojson, |line| renderer.add_border(line, lod));
-    Ok(())
+/// What kind of geometry a file contains and where it goes
+enum FileKind {
+    Coastline(Lod),
+    Border(Lod),
+    State,
+    County,
+    City,
+    LandPolygon(Lod),
 }
 
-/// Load state/province border GeoJSON data
-fn load_states(renderer: &mut MapRenderer, path: &Path) -> Result<()> {
-    let content = fs::read_to_string(path)?;
-    let geojson: GeoJson = content.parse()?;
-    process_geojson_lines(&geojson, |line| renderer.add_state(line));
-    Ok(())
+/// Result of loading + parsing a single file in parallel
+enum LoadResult {
+    Lines(Vec<LineString>, FileKind),
+    Polygons(Vec<Vec<Vec<(f64, f64)>>>, Lod),
+    Cities(Vec<CityData>),
+    Failed(String, String), // filename, error
 }
 
-/// Load county border GeoJSON data
-fn load_counties(renderer: &mut MapRenderer, path: &Path) -> Result<()> {
-    let content = fs::read_to_string(path)?;
-    let geojson: GeoJson = content.parse()?;
-    process_geojson_lines(&geojson, |line| renderer.add_county(line));
-    Ok(())
+/// Load a single file and parse its geometries (no renderer dependency)
+fn load_file(path: &Path, kind: FileKind) -> LoadResult {
+    let content = match fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(e) => return LoadResult::Failed(
+            path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+            e.to_string(),
+        ),
+    };
+    let geojson: GeoJson = match parse_geojson(content) {
+        Ok(g) => g,
+        Err(e) => return LoadResult::Failed(
+            path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+            e.to_string(),
+        ),
+    };
+
+    match kind {
+        FileKind::City => {
+            let cities = extract_cities(&geojson);
+            LoadResult::Cities(cities)
+        }
+        FileKind::LandPolygon(lod) => {
+            let mut polygons = Vec::new();
+            process_geojson_polygons(&geojson, |p| polygons.push(p));
+            LoadResult::Polygons(polygons, lod)
+        }
+        _ => {
+            let mut lines = Vec::new();
+            process_geojson_lines(&geojson, |pts| lines.push(LineString::new(pts)));
+            LoadResult::Lines(lines, kind)
+        }
+    }
 }
 
-/// Load land polygons for accurate land/water detection
-fn load_land_polygons(renderer: &mut MapRenderer, path: &Path, lod: Lod) -> Result<()> {
-    let content = fs::read_to_string(path)?;
-    let geojson: GeoJson = content.parse()?;
-    process_geojson_polygons(&geojson, |polygon| renderer.add_land_polygon(polygon, lod));
-    Ok(())
-}
-
-/// Load cities from GeoJSON
-fn load_cities(renderer: &mut MapRenderer, path: &Path) -> Result<()> {
-    let content = fs::read_to_string(path)?;
-    let geojson: GeoJson = content.parse()?;
-
+/// Extract city data from parsed GeoJSON
+fn extract_cities(geojson: &GeoJson) -> Vec<CityData> {
+    let mut cities = Vec::new();
     if let GeoJson::FeatureCollection(fc) = geojson {
-        for feature in fc.features {
+        for feature in &fc.features {
             let props = feature.properties.as_ref();
 
-            // Get city name
             let name = props
                 .and_then(|p| p.get("name"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("Unknown")
                 .to_string();
 
-            // Get population (try multiple fields)
             let population = props
                 .and_then(|p| {
                     p.get("pop_max")
@@ -162,27 +97,154 @@ fn load_cities(renderer: &mut MapRenderer, path: &Path) -> Result<()> {
                 .map(|v| v as u64)
                 .unwrap_or(0);
 
-            // Check if national capital (adm0cap = 1)
             let is_capital = props
                 .and_then(|p| p.get("adm0cap"))
                 .and_then(|v| v.as_f64())
                 .map(|v| v >= 1.0)
                 .unwrap_or(false);
 
-            // Check if megacity
             let is_megacity = props
                 .and_then(|p| p.get("megacity"))
                 .and_then(|v| v.as_f64())
                 .map(|v| v >= 1.0)
                 .unwrap_or(false);
 
-            // Get coordinates
-            if let Some(geometry) = feature.geometry {
-                if let Value::Point(coords) = geometry.value {
+            if let Some(ref geometry) = feature.geometry {
+                if let Value::Point(ref coords) = geometry.value {
                     if coords.len() >= 2 {
-                        renderer.add_city(coords[0], coords[1], &name, population, is_capital, is_megacity);
+                        cities.push(CityData {
+                            lon: coords[0],
+                            lat: coords[1],
+                            name,
+                            population,
+                            is_capital,
+                            is_megacity,
+                        });
                     }
                 }
+            }
+        }
+    }
+    cities
+}
+
+/// Load all available Natural Earth GeoJSON data into the map renderer
+pub fn load_all_geojson(renderer: &mut MapRenderer, data_dir: &Path) -> Result<()> {
+    // Collect all file tasks
+    let mut tasks: Vec<(PathBuf, FileKind)> = Vec::new();
+
+    // Coastlines
+    for (filename, lod) in [
+        ("ne_110m_coastline.json", Lod::Low),
+        ("natural-earth.json", Lod::Medium),
+        ("ne_50m_coastline.json", Lod::Medium),
+        ("ne_10m_coastline.json", Lod::High),
+    ] {
+        let path = data_dir.join(filename);
+        if path.exists() {
+            tasks.push((path, FileKind::Coastline(lod)));
+        }
+    }
+
+    // Borders
+    for (filename, lod) in [
+        ("ne_50m_borders.json", Lod::Medium),
+        ("ne_10m_borders.json", Lod::High),
+    ] {
+        let path = data_dir.join(filename);
+        if path.exists() {
+            tasks.push((path, FileKind::Border(lod)));
+        }
+    }
+
+    // States
+    let states_path = data_dir.join("ne_10m_states.json");
+    if states_path.exists() {
+        tasks.push((states_path, FileKind::State));
+    }
+
+    // Counties (NE + GADM)
+    let counties_path = data_dir.join("ne_10m_admin_2_counties.json");
+    if counties_path.exists() {
+        tasks.push((counties_path, FileKind::County));
+    }
+    if let Ok(entries) = fs::read_dir(data_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if name.starts_with("gadm41_") && name.ends_with("_2.json") {
+                    tasks.push((path, FileKind::County));
+                }
+            }
+        }
+    }
+
+    // Cities
+    let cities_path = data_dir.join("ne_10m_cities.json");
+    if cities_path.exists() {
+        tasks.push((cities_path, FileKind::City));
+    }
+
+    // Land polygons
+    for (filename, lod) in [
+        ("ne_110m_land.json", Lod::Low),
+        ("ne_50m_land.json", Lod::Medium),
+        ("ne_10m_land.json", Lod::High),
+    ] {
+        let path = data_dir.join(filename);
+        if path.exists() {
+            tasks.push((path, FileKind::LandPolygon(lod)));
+        }
+    }
+
+    // Load + parse all files in parallel
+    let results: Vec<LoadResult> = tasks
+        .into_par_iter()
+        .map(|(path, kind)| load_file(&path, kind))
+        .collect();
+
+    // Merge results sequentially into renderer (just pushing to Vecs — fast)
+    for result in results {
+        match result {
+            LoadResult::Lines(lines, kind) => {
+                match kind {
+                    FileKind::Coastline(lod) => {
+                        for line in lines {
+                            match lod {
+                                Lod::Low => renderer.coastlines_low.push(line),
+                                Lod::Medium => renderer.coastlines_medium.push(line),
+                                Lod::High => renderer.coastlines_high.push(line),
+                            }
+                        }
+                    }
+                    FileKind::Border(lod) => {
+                        for line in lines {
+                            match lod {
+                                Lod::Medium | Lod::Low => renderer.borders_medium.push(line),
+                                Lod::High => renderer.borders_high.push(line),
+                            }
+                        }
+                    }
+                    FileKind::State => renderer.states.extend(lines),
+                    FileKind::County => renderer.counties.extend(lines),
+                    _ => {}
+                }
+            }
+            LoadResult::Polygons(polygons, lod) => {
+                for rings in polygons {
+                    renderer.add_land_polygon(rings, lod);
+                }
+            }
+            LoadResult::Cities(cities) => {
+                for city in cities {
+                    renderer.add_city(
+                        city.lon, city.lat, &city.name,
+                        city.population, city.is_capital, city.is_megacity,
+                    );
+                }
+            }
+            LoadResult::Failed(filename, error) => {
+                eprintln!("Warning: Failed to load {}: {}", filename, error);
             }
         }
     }
@@ -282,7 +344,6 @@ where
 {
     match &geometry.value {
         Value::Polygon(rings) => {
-            // Convert all rings (exterior + holes)
             let polygon: Vec<Vec<(f64, f64)>> = rings
                 .iter()
                 .map(|ring| ring.iter().map(|c| (c[0], c[1])).collect())

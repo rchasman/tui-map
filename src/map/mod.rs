@@ -6,4 +6,4 @@ mod spatial;
 
 pub use globe::GlobeViewport;
 pub use projection::{Projection, Viewport, WRAP_OFFSETS};
-pub use renderer::{Lod, MapLayers, MapRenderer};
+pub use renderer::{LineString, Lod, MapLayers, MapRenderer};
