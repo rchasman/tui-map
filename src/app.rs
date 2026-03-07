@@ -231,12 +231,18 @@ impl App {
 
     /// Zoom in
     pub fn zoom_in(&mut self) {
-        self.projection.zoom_in();
+        match self.mouse_pos {
+            Some((col, row)) => self.zoom_in_at(col, row),
+            None => self.projection.zoom_in(),
+        }
     }
 
     /// Zoom out
     pub fn zoom_out(&mut self) {
-        self.projection.zoom_out();
+        match self.mouse_pos {
+            Some((col, row)) => self.zoom_out_at(col, row),
+            None => self.projection.zoom_out(),
+        }
     }
 
     /// Zoom in towards a screen position (terminal column/row)
