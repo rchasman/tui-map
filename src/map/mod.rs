@@ -1,8 +1,8 @@
-mod geometry;
+pub mod geometry;
 pub mod globe;
-mod projection;
-mod renderer;
-mod spatial;
+pub mod projection;
+pub mod renderer;
+pub mod spatial;
 
 pub use globe::GlobeViewport;
 pub use projection::{Projection, Viewport, WRAP_OFFSETS};

@@ -118,17 +118,17 @@ pub struct LineString {
     pub bbox: (f64, f64, f64, f64), // min_lon, min_lat, max_lon, max_lat
     /// Precomputed unit-sphere vectors — eliminates trig in globe hot loop.
     /// Amortized O(1) per frame vs O(n) sin/cos calls.
-    vecs: Vec<globe::DVec3>,
+    pub vecs: Vec<globe::DVec3>,
     /// Bounding sphere center on unit sphere for O(1) hemisphere culling.
     /// Single dot product replaces 4× lonlat_to_vec3 + 4 dot products.
-    center_vec: globe::DVec3,
+    pub center_vec: globe::DVec3,
     /// Feature invisible when center_vec·forward < cull_dot.
     /// Precomputed as -sin(angular_radius + padding).
-    cull_dot: f64,
+    pub cull_dot: f64,
     /// Precomputed Mercator coordinates — eliminates trig in Mercator hot loop.
-    mercator: Vec<(f64, f64)>,
+    pub mercator: Vec<(f64, f64)>,
     /// Mercator-space bounding box for trig-free bbox early-out.
-    mercator_bbox: (f64, f64, f64, f64),
+    pub mercator_bbox: (f64, f64, f64, f64),
 }
 
 impl LineString {
@@ -333,9 +333,9 @@ struct RenderCache {
 /// Fine 0.1° tier (3600×1800) bitmap provides exact checks for coastal cells.
 /// Deep ocean/inland checks skip the fine tier entirely.
 pub struct LandGrid {
-    bitmap: Vec<u64>,
+    pub bitmap: Vec<u64>,
     /// Coarse 1° tier: 0=all water, 1=mixed, 2=all land
-    coarse: Vec<u8>,
+    pub coarse: Vec<u8>,
 }
 
 impl LandGrid {
