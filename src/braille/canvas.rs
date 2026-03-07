@@ -33,7 +33,7 @@ impl BrailleCanvas {
 
     /// Set a pixel at the given coordinates.
     /// Braille dot layout per character:
-    /// ```
+    /// ```text
     /// (0,0) (1,0)   bits: 0x01 0x08
     /// (0,1) (1,1)   bits: 0x02 0x10
     /// (0,2) (1,2)   bits: 0x04 0x20
