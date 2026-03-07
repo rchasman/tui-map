@@ -16,3 +16,5 @@ simd-json = "0.17.0"
 [profile.release]
 lto = true
 codegen-units = 1
+strip = true
+panic = "abort"
