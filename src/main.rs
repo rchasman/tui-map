@@ -87,7 +87,7 @@ fn run(terminal: &mut DefaultTerminal) -> Result<()> {
     // Main loop
     loop {
         // Draw
-        terminal.draw(|frame| ui::render(frame, &app))?;
+        terminal.draw(|frame| ui::render(frame, &mut app))?;
 
         // Handle events with ~60fps target
         if event::poll(Duration::from_millis(16))? {

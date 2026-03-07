@@ -2,6 +2,19 @@ use crate::app::{App, WeaponType};
 use crate::hash::{hash2, hash3};
 use crate::map::{GlobeViewport, MapLayers, Projection, WRAP_OFFSETS};
 use crate::map::globe::lonlat_to_vec3;
+
+/// Fast pseudo-angle using diamond angle technique.
+/// Returns a value in [0, 4) that varies monotonically with angle,
+/// suitable for turbulence seeding. Replaces atan2 (~10x faster).
+#[inline(always)]
+fn fast_pseudo_angle(dx: f32, dy: f32) -> f32 {
+    let ax = dx.abs();
+    let ay = dy.abs();
+    let s = ax + ay;
+    if s < 1e-6 { return 0.0; }
+    let d = dy / s;
+    if dx >= 0.0 { 1.0 - d } else { 3.0 + d }
+}
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Direction, Layout, Rect},
@@ -12,7 +25,7 @@ use ratatui::{
 };
 
 /// Render the UI
-pub fn render(frame: &mut Frame, app: &App) {
+pub fn render(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
 
     // Split into map area and status bar
@@ -28,7 +41,7 @@ pub fn render(frame: &mut Frame, app: &App) {
     render_status_bar(frame, app, chunks[1]);
 }
 
-fn render_map(frame: &mut Frame, app: &App, area: Rect) {
+fn render_map(frame: &mut Frame, app: &mut App, area: Rect) {
     // Create a block with border
     let block = Block::default()
         .borders(Borders::ALL)
@@ -43,13 +56,12 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    // Update projection size for rendering
-    let mut projection = app.projection.clone();
     // Braille gives 2x4 resolution per character
-    projection.set_size(inner.width as usize * 2, inner.height as usize * 4);
+    app.projection.set_size(inner.width as usize * 2, inner.height as usize * 4);
+    let projection = &app.projection;
 
     // Render map layers
-    let layers = app.map_renderer.render(inner.width as usize, inner.height as usize, &projection);
+    let layers = app.map_renderer.render(inner.width as usize, inner.height as usize, projection);
 
     // Get mouse cursor position for marker
     let cursor_pos = app.mouse_pixel_pos().and_then(|(px, py)| {
@@ -118,7 +130,7 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     // Project gas clouds to screen coordinates
-    let mut gas_clouds: Vec<GasCloudRender> = Vec::new();
+    let mut gas_clouds: Vec<GasCloudRender> = Vec::with_capacity(app.gas_clouds.len());
     for cloud in &app.gas_clouds {
         let screen_positions: Vec<(i32, i32)> = if is_globe {
             projection.project_point(cloud.lon, cloud.lat).into_iter().collect()
@@ -159,20 +171,28 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
         }
     }
 
-    // Screen-space fire map: merge overlapping fires by tracking max intensity + weapon per cell
+    // Screen-space fire map: reuse buffers across frames to avoid per-frame allocation
     let fire_map_width = inner.width as usize;
     let fire_map_height = inner.height as usize;
     let fire_map_size = fire_map_width * fire_map_height;
-    let mut fire_map_intensity: Vec<u8> = vec![0; fire_map_size];
-    let mut fire_map_weapon: Vec<WeaponType> = vec![WeaponType::Nuke; fire_map_size];
+    if app.fire_map_dims != (fire_map_width, fire_map_height) {
+        app.fire_map_intensity = vec![0; fire_map_size];
+        app.fire_map_weapon = vec![WeaponType::Nuke; fire_map_size];
+        app.fire_map_dims = (fire_map_width, fire_map_height);
+    } else {
+        app.fire_map_intensity.fill(0);
+        app.fire_map_weapon.fill(WeaponType::Nuke);
+    }
 
     // Helper to merge fire into map (max intensity wins, keeps its weapon)
+    let fmi = &mut app.fire_map_intensity;
+    let fmw = &mut app.fire_map_weapon;
     let mut add_fire = |cx: usize, cy: usize, intensity: u8, weapon: WeaponType| {
         if cx < fire_map_width && cy < fire_map_height {
             let idx = cy * fire_map_width + cx;
-            if intensity > fire_map_intensity[idx] {
-                fire_map_intensity[idx] = intensity;
-                fire_map_weapon[idx] = weapon;
+            if intensity > fmi[idx] {
+                fmi[idx] = intensity;
+                fmw[idx] = weapon;
             }
         }
     };
@@ -258,14 +278,14 @@ fn render_map(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     // Convert fire map to FireRender vec (only non-zero cells)
-    let fires: Vec<FireRender> = fire_map_intensity
+    let fires: Vec<FireRender> = app.fire_map_intensity
         .iter()
         .enumerate()
         .filter_map(|(idx, &intensity)| {
             if intensity > 0 {
                 let x = (idx % fire_map_width) as u16;
                 let y = (idx / fire_map_width) as u16;
-                Some(FireRender { x, y, intensity, weapon_type: fire_map_weapon[idx] })
+                Some(FireRender { x, y, intensity, weapon_type: app.fire_map_weapon[idx] })
             } else {
                 None
             }
@@ -338,7 +358,7 @@ struct GasCloudRender {
 }
 
 /// Custom widget that renders braille map with text labels overlaid
-struct MapWidget {
+struct MapWidget<'a> {
     layers: MapLayers,
     cursor_pos: Option<(u16, u16)>,
     cursor_geo: Option<(f64, f64)>,
@@ -350,10 +370,10 @@ struct MapWidget {
     inner_width: u16,
     inner_height: u16,
     frame: u64,
-    projection: Projection,
+    projection: &'a Projection,
 }
 
-impl MapWidget {
+impl<'a> MapWidget<'a> {
     /// Render a braille canvas layer with a specific color.
     /// Reads raw bytes directly — zero String allocations per frame.
     fn render_layer(&self, canvas: &crate::braille::BrailleCanvas, color: Color, area: Rect, buf: &mut Buffer) {
@@ -373,7 +393,7 @@ impl MapWidget {
     }
 }
 
-impl Widget for MapWidget {
+impl<'a> Widget for MapWidget<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         // Render layers from back to front:
         // 0. Globe outline (very faint, behind everything)
@@ -634,8 +654,7 @@ fn render_nuke_explosion(exp: &ExplosionRender, x: u16, y: u16, area: Rect, glob
         for dx in -(radius_i16)..=(radius_i16) {
             let dist_sq = (dx * dx + dy_sq) as f32;
             let dx_f32 = dx as f32;
-            let angle = dx_f32.atan2(dy_f32);
-            let large_turb_seed = hash2((angle * 1000.0) as u64, global_frame / 5);
+            let large_turb_seed = hash2((fast_pseudo_angle(dx_f32, dy_f32) * 1000.0) as u64, global_frame / 5);
             let large_turbulence = ((large_turb_seed & 0xFF) as f32 / 255.0 - 0.5) * 0.6;
             let fine_turb_seed = hash3(dx as u64, dy as u64, frame_seed_component);
             let fine_turbulence = ((fine_turb_seed & 0xFF) as f32 / 255.0 - 0.5) * 0.4;
@@ -740,10 +759,9 @@ fn render_bio_explosion(exp: &ExplosionRender, x: u16, y: u16, area: Rect, globa
         for dx in -(radius_i16)..=(radius_i16) {
             let dist_sq = (dx * dx + dy_sq) as f32;
             let dx_f32 = dx as f32;
-            let angle = dx_f32.atan2(dy_f32);
 
             // Higher fine turbulence for irregular tendrils
-            let large_turb_seed = hash2((angle * 800.0) as u64, global_frame / 4);
+            let large_turb_seed = hash2((fast_pseudo_angle(dx_f32, dy_f32) * 800.0) as u64, global_frame / 4);
             let large_turbulence = ((large_turb_seed & 0xFF) as f32 / 255.0 - 0.5) * 0.8;
             let fine_turb_seed = hash3(dx as u64, dy as u64, frame_seed_component);
             let fine_turbulence = ((fine_turb_seed & 0xFF) as f32 / 255.0 - 0.5) * 0.7; // High fine turbulence
@@ -1097,13 +1115,12 @@ fn render_gas_cloud(cloud: &GasCloudRender, area: Rect, global_frame: u64, buf: 
             let px = px_signed as u16;
 
             // Screen-space angle for lobe lookup (visual flair, same in both modes)
-            let screen_angle = (dx as f32).atan2(dy as f32);
-            let angle_norm = (screen_angle + std::f32::consts::PI) / std::f32::consts::TAU;
+            let angle_norm = fast_pseudo_angle(dx as f32, dy as f32) / 4.0;
             let lobe_pos = angle_norm * N_LOBES as f32;
             let lobe_idx = (lobe_pos as usize) % N_LOBES;
             let lobe_next = (lobe_idx + 1) % N_LOBES;
             let lobe_frac = lobe_pos - lobe_pos.floor();
-            let t = (1.0 - (lobe_frac * std::f32::consts::PI).cos()) * 0.5;
+            let t = lobe_frac * lobe_frac * (3.0 - 2.0 * lobe_frac); // smoothstep
             let lobe_mult = lobe_factor[lobe_idx] * (1.0 - t) + lobe_factor[lobe_next] * t;
 
             // Compute normalized distance (0=center, 1=edge) using appropriate geometry
@@ -1261,5 +1278,39 @@ fn format_casualties(n: u64) -> String {
         format!("{:.0}K", n as f64 / 1_000.0)
     } else {
         n.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fast_pseudo_angle_range() {
+        // All quadrants should produce values in [0, 4)
+        for &(dx, dy) in &[
+            (1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (-1.0, 1.0),
+            (-1.0, 0.0), (-1.0, -1.0), (0.0, -1.0), (1.0, -1.0),
+        ] {
+            let a = fast_pseudo_angle(dx, dy);
+            assert!(a >= 0.0 && a < 4.0, "angle {a} out of range for ({dx}, {dy})");
+        }
+    }
+
+    #[test]
+    fn fast_pseudo_angle_zero() {
+        assert_eq!(fast_pseudo_angle(0.0, 0.0), 0.0);
+    }
+
+    #[test]
+    fn fast_pseudo_angle_monotonic_quadrant1() {
+        // Diamond angle decreases in Q1: (1,0)→1.0 down to (0,1)→0.0
+        let a0 = fast_pseudo_angle(1.0, 0.0);
+        let a1 = fast_pseudo_angle(1.0, 0.5);
+        let a2 = fast_pseudo_angle(1.0, 1.0);
+        let a3 = fast_pseudo_angle(0.5, 1.0);
+        assert!(a0 > a1, "not monotonic: {a0} <= {a1}");
+        assert!(a1 > a2, "not monotonic: {a1} <= {a2}");
+        assert!(a2 > a3, "not monotonic: {a2} <= {a3}");
     }
 }
