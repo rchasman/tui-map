@@ -179,6 +179,10 @@ pub struct App {
     last_nuke_frame: u64,
     /// Globe horizontal spin momentum (radians/frame, vertical axis only)
     spin_velocity: f64,
+    /// Reusable fire map buffers (avoids per-frame allocation)
+    pub fire_map_intensity: Vec<u8>,
+    pub fire_map_weapon: Vec<WeaponType>,
+    pub fire_map_dims: (usize, usize),
 }
 
 impl App {
@@ -207,6 +211,9 @@ impl App {
             frame: 0,
             last_nuke_frame: 0,
             spin_velocity: 0.0,
+            fire_map_intensity: Vec::new(),
+            fire_map_weapon: Vec::new(),
+            fire_map_dims: (0, 0),
         }
     }
 
@@ -496,7 +503,7 @@ impl App {
                         (city.population as f64 * damage_ratio * 0.7 * size_factor) as u64
                     };
 
-                    city.population = city.population.saturating_sub(killed);
+                    city.set_population(city.population.saturating_sub(killed));
                     self.casualties += killed;
                 }
             }
@@ -680,9 +687,9 @@ impl App {
                     if damage == 0 && city.population < orig_pop / 20 {
                         // Collapse: infrastructure fails below 5% of original
                         self.casualties += city.population;
-                        city.population = 0;
+                        city.set_population(0);
                     } else {
-                        city.population = city.population.saturating_sub(damage);
+                        city.set_population(city.population.saturating_sub(damage));
                         self.casualties += damage;
                     }
                 }
@@ -731,9 +738,9 @@ impl App {
                     if damage == 0 && city.population < city.original_population / 20 {
                         // Collapse: infrastructure fails below 5% of original
                         self.casualties += city.population;
-                        city.population = 0;
+                        city.set_population(0);
                     } else {
-                        city.population = city.population.saturating_sub(damage);
+                        city.set_population(city.population.saturating_sub(damage));
                         self.casualties += damage;
                     }
                 }

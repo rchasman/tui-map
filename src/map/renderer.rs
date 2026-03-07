@@ -220,7 +220,18 @@ pub struct City {
     pub original_population: u64,
     pub is_capital: bool,
     pub is_megacity: bool,
-    pub radius_km: f64, // Physical city radius based on population
+    pub radius_km: f64,
+    /// Pre-formatted population string ("1.2M", "500K", etc.)
+    /// Updated only when population changes — avoids per-frame format!()
+    pub cached_pop_label: String,
+}
+
+impl City {
+    /// Update population and refresh cached label
+    pub fn set_population(&mut self, pop: u64) {
+        self.population = pop;
+        self.cached_pop_label = format_population(pop);
+    }
 }
 
 /// Calculate city radius in km from population
@@ -328,9 +339,11 @@ pub struct LandGrid {
 }
 
 impl LandGrid {
-    const WIDTH: usize = 3600;  // 360° / 0.1°
-    const HEIGHT: usize = 1800; // 180° / 0.1°
-    const RESOLUTION: f64 = 0.1;
+    const WIDTH: usize = 3600;       // 360° / RESOLUTION
+    const HEIGHT: usize = 1800;      // 180° / RESOLUTION
+    const RESOLUTION: f64 = 0.1;     // Fine tier: 0.1° per cell
+    #[allow(dead_code)]
+    const COARSE_RES: f64 = 1.0;     // Coarse tier: 1° per cell (10×10 fine cells)
     const TOTAL_BITS: usize = Self::WIDTH * Self::HEIGHT; // 6,480,000
     const BITMAP_LEN: usize = (Self::TOTAL_BITS + 63) / 64; // 101,250 u64s = 810KB
 
@@ -367,13 +380,6 @@ impl LandGrid {
     }
 
     #[inline(always)]
-    fn set_bit(&mut self, idx: usize) {
-        if idx < Self::TOTAL_BITS {
-            self.bitmap[idx / 64] |= 1u64 << (idx % 64);
-        }
-    }
-
-    #[inline(always)]
     fn get_bit(&self, idx: usize) -> bool {
         if idx < Self::TOTAL_BITS {
             (self.bitmap[idx / 64] >> (idx % 64)) & 1 == 1
@@ -382,36 +388,49 @@ impl LandGrid {
         }
     }
 
-    /// Precompute land grid from polygons (call once at startup)
+    /// Precompute land grid from polygons in parallel (call once at startup).
+    /// Each rayon thread builds a local bitmap for its polygon chunk,
+    /// then bitmaps are merged with bitwise OR.
     pub fn from_polygons(polygons: &[Polygon]) -> Self {
-        let mut grid = Self::new();
+        use rayon::prelude::*;
 
-        // Process each polygon and fill its cells (bbox-optimized)
-        for polygon in polygons {
-            let (min_lon, min_lat, max_lon, max_lat) = polygon.bbox;
+        // Each chunk produces a local bitmap; merge via bitwise OR
+        let chunk_size = (polygons.len() / rayon::current_num_threads().max(1)).max(1);
+        let sub_bitmaps: Vec<Vec<u64>> = polygons.par_chunks(chunk_size)
+            .map(|chunk| {
+                let mut bitmap = vec![0u64; Self::BITMAP_LEN];
+                for polygon in chunk {
+                    let (min_lon, min_lat, max_lon, max_lat) = polygon.bbox;
+                    let lon_start = (((min_lon + 180.0) / Self::RESOLUTION).floor() as usize).saturating_sub(1);
+                    let lon_end = (((max_lon + 180.0) / Self::RESOLUTION).ceil() as usize + 1).min(Self::WIDTH);
+                    let lat_start = (((min_lat + 90.0) / Self::RESOLUTION).floor() as usize).saturating_sub(1);
+                    let lat_end = (((max_lat + 90.0) / Self::RESOLUTION).ceil() as usize + 1).min(Self::HEIGHT);
 
-            // Convert bbox to grid indices (with padding for edge cases)
-            let lon_start = (((min_lon + 180.0) / Self::RESOLUTION).floor() as usize).saturating_sub(1);
-            let lon_end = (((max_lon + 180.0) / Self::RESOLUTION).ceil() as usize + 1).min(Self::WIDTH);
-            let lat_start = (((min_lat + 90.0) / Self::RESOLUTION).floor() as usize).saturating_sub(1);
-            let lat_end = (((max_lat + 90.0) / Self::RESOLUTION).ceil() as usize + 1).min(Self::HEIGHT);
-
-            // Only check cells within polygon's bounding box
-            for lat_idx in lat_start..lat_end {
-                let lat = -90.0 + (lat_idx as f64 + 0.5) * Self::RESOLUTION;
-
-                for lon_idx in lon_start..lon_end {
-                    let lon = -180.0 + (lon_idx as f64 + 0.5) * Self::RESOLUTION;
-
-                    if polygon.contains(lon, lat) {
-                        let idx = lat_idx * Self::WIDTH + lon_idx;
-                        grid.set_bit(idx);
+                    for lat_idx in lat_start..lat_end {
+                        let lat = -90.0 + (lat_idx as f64 + 0.5) * Self::RESOLUTION;
+                        for lon_idx in lon_start..lon_end {
+                            let lon = -180.0 + (lon_idx as f64 + 0.5) * Self::RESOLUTION;
+                            if polygon.contains(lon, lat) {
+                                let idx = lat_idx * Self::WIDTH + lon_idx;
+                                if idx < Self::TOTAL_BITS {
+                                    bitmap[idx / 64] |= 1u64 << (idx % 64);
+                                }
+                            }
+                        }
                     }
                 }
+                bitmap
+            })
+            .collect();
+
+        // Merge sub-bitmaps into final grid
+        let mut grid = Self::new();
+        for sub in sub_bitmaps {
+            for (i, bits) in sub.iter().enumerate() {
+                grid.bitmap[i] |= bits;
             }
         }
 
-        // Build coarse tier from fine bitmap
         grid.build_coarse();
         grid
     }
@@ -582,30 +601,38 @@ impl MapRenderer {
         candidates
     }
 
-    /// Build spatial indexes for all feature collections (call after loading data)
+    /// Build spatial indexes for all feature collections in parallel.
+    /// Order is fixed: the Vec indices match the grid assignments below.
     pub fn build_spatial_indexes(&mut self) {
+        use rayon::prelude::*;
         const CELL_SIZE: f64 = 5.0;
-        self.coastline_grid_low = FeatureGrid::build(
-            self.coastlines_low.iter().map(|l| l.bbox), CELL_SIZE,
-        );
-        self.coastline_grid_medium = FeatureGrid::build(
-            self.coastlines_medium.iter().map(|l| l.bbox), CELL_SIZE,
-        );
-        self.coastline_grid_high = FeatureGrid::build(
-            self.coastlines_high.iter().map(|l| l.bbox), CELL_SIZE,
-        );
-        self.border_grid_medium = FeatureGrid::build(
-            self.borders_medium.iter().map(|l| l.bbox), CELL_SIZE,
-        );
-        self.border_grid_high = FeatureGrid::build(
-            self.borders_high.iter().map(|l| l.bbox), CELL_SIZE,
-        );
-        self.state_grid = FeatureGrid::build(
-            self.states.iter().map(|l| l.bbox), CELL_SIZE,
-        );
-        self.county_grid = FeatureGrid::build(
-            self.counties.iter().map(|l| l.bbox), CELL_SIZE,
-        );
+
+        // Collect bboxes upfront so we can release the borrow on self.
+        // Order must match the assignment sequence below (0=coast_low, ..., 6=county).
+        let bbox_sets: Vec<Vec<(f64, f64, f64, f64)>> = vec![
+            self.coastlines_low.iter().map(|l| l.bbox).collect(),
+            self.coastlines_medium.iter().map(|l| l.bbox).collect(),
+            self.coastlines_high.iter().map(|l| l.bbox).collect(),
+            self.borders_medium.iter().map(|l| l.bbox).collect(),
+            self.borders_high.iter().map(|l| l.bbox).collect(),
+            self.states.iter().map(|l| l.bbox).collect(),
+            self.counties.iter().map(|l| l.bbox).collect(),
+        ];
+
+        // Build all 7 grids in parallel
+        let grids: Vec<FeatureGrid> = bbox_sets
+            .into_par_iter()
+            .map(|bbs| FeatureGrid::build(bbs.into_iter(), CELL_SIZE))
+            .collect();
+
+        let mut grids = grids.into_iter();
+        self.coastline_grid_low = grids.next().unwrap();
+        self.coastline_grid_medium = grids.next().unwrap();
+        self.coastline_grid_high = grids.next().unwrap();
+        self.border_grid_medium = grids.next().unwrap();
+        self.border_grid_high = grids.next().unwrap();
+        self.state_grid = grids.next().unwrap();
+        self.county_grid = grids.next().unwrap();
     }
 
     /// Get max number of cities to show based on zoom
@@ -969,7 +996,7 @@ impl MapRenderer {
             if self.settings.show_labels {
                 if let Some(label_x) = char_x.checked_add(1) {
                     let label = if self.settings.show_population {
-                        format!(" {} ({})", city.name, format_population(city.population))
+                        format!(" {} ({})", city.name, city.cached_pop_label)
                     } else {
                         format!(" {}", city.name)
                     };
@@ -1126,32 +1153,13 @@ impl MapRenderer {
         }
     }
 
-    /// Add border data at a specific LOD
-    pub fn add_border(&mut self, points: Vec<(f64, f64)>, lod: Lod) {
-        let line = LineString::new(points);
-        match lod {
-            Lod::Medium => self.borders_medium.push(line),
-            Lod::High => self.borders_high.push(line),
-            Lod::Low => self.borders_medium.push(line), // Low uses medium
-        }
-    }
-
-    /// Add state/province border
-    pub fn add_state(&mut self, points: Vec<(f64, f64)>) {
-        self.states.push(LineString::new(points));
-    }
-
-    /// Add county border
-    pub fn add_county(&mut self, points: Vec<(f64, f64)>) {
-        self.counties.push(LineString::new(points));
-    }
-
     /// Add a city marker
     pub fn add_city(&mut self, lon: f64, lat: f64, name: &str, population: u64, is_capital: bool, is_megacity: bool) {
         let radius_km = city_radius_from_population(population);
         self.city_grid.insert(lon, lat, City {
             lon,
             lat,
+            cached_pop_label: format_population(population),
             name: name.to_string(),
             population,
             original_population: population,
@@ -1233,5 +1241,51 @@ impl MapRenderer {
 impl Default for MapRenderer {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn city_set_population_updates_cached_label() {
+        let mut city = City {
+            lon: 0.0, lat: 0.0,
+            name: "Test".to_string(),
+            population: 5_000_000,
+            original_population: 5_000_000,
+            is_capital: false,
+            is_megacity: false,
+            radius_km: 10.0,
+            cached_pop_label: format_population(5_000_000),
+        };
+        assert_eq!(city.cached_pop_label, "5.0M");
+
+        city.set_population(250_000);
+        assert_eq!(city.population, 250_000);
+        assert_eq!(city.cached_pop_label, "250K");
+
+        city.set_population(0);
+        assert_eq!(city.cached_pop_label, "0");
+    }
+
+    #[test]
+    fn linestring_len_matches_mercator_coords() {
+        let pts = vec![(0.0, 0.0), (10.0, 20.0), (30.0, 40.0)];
+        let ls = LineString::new(pts);
+        assert_eq!(ls.len(), 3);
+        assert_eq!(ls.mercator.len(), 3);
+    }
+
+    #[test]
+    fn linestring_mercator_bbox_contains_all_points() {
+        let pts = vec![(-10.0, -20.0), (30.0, 50.0), (0.0, 0.0)];
+        let ls = LineString::new(pts);
+        let (min_x, min_y, max_x, max_y) = ls.mercator_bbox;
+        for &(mx, my) in &ls.mercator {
+            assert!(mx >= min_x && mx <= max_x, "mx {mx} outside [{min_x}, {max_x}]");
+            assert!(my >= min_y && my <= max_y, "my {my} outside [{min_y}, {max_y}]");
+        }
     }
 }
