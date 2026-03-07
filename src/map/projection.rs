@@ -342,4 +342,50 @@ mod tests {
         vp.pan(10, 0);
         assert!(vp.center_lon > 0.0);
     }
+
+    #[test]
+    fn test_mercator_x_bounds() {
+        assert!((mercator_x(-180.0) - 0.0).abs() < 1e-10);
+        assert!((mercator_x(0.0) - 0.5).abs() < 1e-10);
+        assert!((mercator_x(180.0) - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_mercator_y_equator_and_clamp() {
+        // Equator → 0.5
+        assert!((mercator_y(0.0) - 0.5).abs() < 1e-10);
+        // Northern hemisphere → < 0.5
+        assert!(mercator_y(45.0) < 0.5);
+        // Extreme latitudes clamp to ±85°
+        assert!((mercator_y(90.0) - mercator_y(85.0)).abs() < 1e-10);
+        assert!((mercator_y(-90.0) - mercator_y(-85.0)).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_project_mercator_matches_project_wrapped() {
+        let vp = Viewport::new(10.0, 30.0, 3.0, 200, 200);
+        let lon = 25.0;
+        let lat = 45.0;
+        let offset = -360.0;
+
+        let ((wx, wy), _) = vp.project_wrapped(lon, lat, offset);
+        let (mx, my) = vp.project_mercator(mercator_x(lon), mercator_y(lat), offset);
+        assert_eq!(wx, mx);
+        assert_eq!(wy, my);
+    }
+
+    #[test]
+    fn test_derived_fields_stay_in_sync() {
+        let mut vp = Viewport::new(0.0, 0.0, 2.0, 100, 100);
+        assert!((vp.scale - 200.0).abs() < 1e-10);
+        assert!((vp.half_w - 50.0).abs() < 1e-10);
+
+        vp.zoom_in();
+        assert!((vp.scale - 3.0 * 100.0).abs() < 1e-10); // 2.0 * 1.5 = 3.0
+
+        vp.set_dimensions(200, 150);
+        assert!((vp.half_w - 100.0).abs() < 1e-10);
+        assert!((vp.half_h - 75.0).abs() < 1e-10);
+        assert!((vp.scale - 3.0 * 200.0).abs() < 1e-10);
+    }
 }
