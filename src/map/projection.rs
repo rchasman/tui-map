@@ -5,6 +5,19 @@ use std::f64::consts::PI;
 /// Try the original position first, then ±360°.
 pub const WRAP_OFFSETS: [f64; 3] = [0.0, -360.0, 360.0];
 
+/// Normalized Mercator X from longitude.
+#[inline(always)]
+pub fn mercator_x(lon: f64) -> f64 {
+    (lon + 180.0) / 360.0
+}
+
+/// Normalized Mercator Y from latitude (clamped to ±85° to avoid singularity).
+#[inline(always)]
+pub fn mercator_y(lat: f64) -> f64 {
+    let lat_rad = lat.clamp(-85.0, 85.0) * PI / 180.0;
+    (1.0 - (lat_rad.tan() + 1.0 / lat_rad.cos()).ln() / PI) / 2.0
+}
+
 /// Viewport representing the visible map area and zoom level
 #[derive(Clone)]
 pub struct Viewport {
@@ -46,9 +59,8 @@ impl Viewport {
 
     /// Recompute cached projection constants from current state.
     fn recompute_derived(&mut self) {
-        self.center_x = (self.center_lon + 180.0) / 360.0;
-        let center_lat_rad = self.center_lat * PI / 180.0;
-        self.center_y = (1.0 - (center_lat_rad.tan() + 1.0 / center_lat_rad.cos()).ln() / PI) / 2.0;
+        self.center_x = mercator_x(self.center_lon);
+        self.center_y = mercator_y(self.center_lat);
         self.scale = self.zoom * self.width as f64;
         self.half_w = self.width as f64 / 2.0;
         self.half_h = self.height as f64 / 2.0;
@@ -119,15 +131,14 @@ impl Viewport {
         // This avoids the pan() function's linear Mercator approximation
         let scale = self.zoom * self.width as f64;
 
-        // Longitude: solve center_x from px = ((x - center_x) * scale + width/2)
-        let x = (target_lon + 180.0) / 360.0;
-        let center_x = x - (px as f64 - self.width as f64 / 2.0) / scale;
+        // Longitude: solve center_x from px = ((x - center_x) * scale + half_w)
+        let x = mercator_x(target_lon);
+        let center_x = x - (px as f64 - self.half_w) / scale;
         self.center_lon = center_x * 360.0 - 180.0;
 
         // Latitude: use exact Mercator math (not linear approximation)
-        let lat_rad = target_lat * PI / 180.0;
-        let y = (1.0 - (lat_rad.tan() + 1.0 / lat_rad.cos()).ln() / PI) / 2.0;
-        let center_y = y - (py as f64 - self.height as f64 / 2.0) / scale;
+        let y = mercator_y(target_lat);
+        let center_y = y - (py as f64 - self.half_h) / scale;
 
         // Inverse Mercator for center latitude
         let new_center_lat_rad = (PI * (1.0 - 2.0 * center_y)).sinh().atan();
@@ -158,15 +169,18 @@ impl Viewport {
     /// Returns (pixel_coords, normalized_lon)
     pub fn project_wrapped(&self, lon: f64, lat: f64, lon_offset: f64) -> ((i32, i32), f64) {
         let wrapped_lon = lon + lon_offset;
+        let px_py = self.project_mercator(mercator_x(wrapped_lon), mercator_y(lat), 0.0);
+        (px_py, wrapped_lon)
+    }
 
-        let x = (wrapped_lon + 180.0) / 360.0;
-        let lat_rad = lat * PI / 180.0;
-        let y = (1.0 - (lat_rad.tan() + 1.0 / lat_rad.cos()).ln() / PI) / 2.0;
-
-        let px = ((x - self.center_x) * self.scale + self.half_w) as i32;
-        let py = ((y - self.center_y) * self.scale + self.half_h) as i32;
-
-        ((px, py), wrapped_lon)
+    /// Project pre-normalized Mercator coordinates to screen pixels.
+    /// Pure arithmetic — zero trig. Used by the hot rendering loop.
+    #[inline(always)]
+    pub fn project_mercator(&self, mx: f64, my: f64, lon_offset: f64) -> (i32, i32) {
+        let x_offset = lon_offset / 360.0;
+        let px = ((mx + x_offset - self.center_x) * self.scale + self.half_w) as i32;
+        let py = ((my - self.center_y) * self.scale + self.half_h) as i32;
+        (px, py)
     }
 
     /// Project trying all wrap offsets, return first with non-negative coords within safe range.

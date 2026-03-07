@@ -2,10 +2,9 @@ use crate::braille::BrailleCanvas;
 use crate::map::geometry::draw_line;
 use crate::map::globe::{self, GlobeViewport};
 use crate::geo::{normalize_lat, normalize_lon};
-use crate::map::projection::{Projection, Viewport, WRAP_OFFSETS};
+use crate::map::projection::{Projection, Viewport, WRAP_OFFSETS, mercator_x, mercator_y};
 use crate::map::spatial::{FeatureGrid, SpatialGrid};
 use std::cell::RefCell;
-use std::f64::consts::PI;
 use std::rc::Rc;
 
 /// Rendered map layers with separate canvases for color differentiation.
@@ -112,25 +111,10 @@ fn point_in_polygon(x: f64, y: f64, ring: &[(f64, f64)]) -> bool {
     inside
 }
 
-/// Normalized Mercator X from longitude.
-#[inline(always)]
-fn mercator_x(lon: f64) -> f64 {
-    (lon + 180.0) / 360.0
-}
-
-/// Normalized Mercator Y from latitude (clamped to ±85° to avoid singularity).
-#[inline(always)]
-fn mercator_y(lat: f64) -> f64 {
-    let lat_clamped = lat.clamp(-85.0, 85.0);
-    let lat_rad = lat_clamped * PI / 180.0;
-    (1.0 - (lat_rad.tan() + 1.0 / lat_rad.cos()).ln() / PI) / 2.0
-}
-
 /// A geographic line (sequence of lon/lat coordinates) with precomputed bounding box
 /// and unit-sphere geometry for globe rendering (conservative approximation).
 #[derive(Clone)]
 pub struct LineString {
-    pub points: Vec<(f64, f64)>,
     pub bbox: (f64, f64, f64, f64), // min_lon, min_lat, max_lon, max_lat
     /// Precomputed unit-sphere vectors — eliminates trig in globe hot loop.
     /// Amortized O(1) per frame vs O(n) sin/cos calls.
@@ -191,7 +175,6 @@ impl LineString {
         let cull_dot = -(angular_radius + 0.05).sin();
 
         Self {
-            points,
             bbox: (min_lon, min_lat, max_lon, max_lat),
             vecs,
             center_vec,
@@ -202,7 +185,7 @@ impl LineString {
     }
 
     pub fn len(&self) -> usize {
-        self.points.len()
+        self.vecs.len()
     }
 }
 
@@ -1012,15 +995,10 @@ impl MapRenderer {
     /// Draw a linestring with a longitude offset (for wrapping).
     /// Uses precomputed Mercator coordinates — pure arithmetic, zero trig per vertex.
     fn draw_linestring_with_offset(&self, canvas: &mut BrailleCanvas, line: &LineString, viewport: &Viewport, lon_offset: f64) {
-        // Mercator X offset for wrapping: {0, -360, 360} → {0.0, -1.0, 1.0}
-        let x_offset = lon_offset / 360.0;
-
         // Bbox early-out using precomputed Mercator bbox (pure arithmetic, no trig)
         let (merc_min_x, merc_min_y, merc_max_x, merc_max_y) = line.mercator_bbox;
-        let px1 = ((merc_min_x + x_offset - viewport.center_x) * viewport.scale + viewport.half_w) as i32;
-        let px2 = ((merc_max_x + x_offset - viewport.center_x) * viewport.scale + viewport.half_w) as i32;
-        let py1 = ((merc_min_y - viewport.center_y) * viewport.scale + viewport.half_h) as i32;
-        let py2 = ((merc_max_y - viewport.center_y) * viewport.scale + viewport.half_h) as i32;
+        let (px1, py1) = viewport.project_mercator(merc_min_x, merc_min_y, lon_offset);
+        let (px2, py2) = viewport.project_mercator(merc_max_x, merc_max_y, lon_offset);
         let bb_min_x = px1.min(px2);
         let bb_max_x = px1.max(px2);
         let bb_min_y = py1.min(py2);
@@ -1035,8 +1013,7 @@ impl MapRenderer {
         let mut prev: Option<(i32, i32)> = None;
 
         for &(mx, my) in &line.mercator {
-            let px = ((mx + x_offset - viewport.center_x) * viewport.scale + viewport.half_w) as i32;
-            let py = ((my - viewport.center_y) * viewport.scale + viewport.half_h) as i32;
+            let (px, py) = viewport.project_mercator(mx, my, lon_offset);
 
             if let Some((prev_x, prev_y)) = prev {
                 // Skip drawing if jump is too large (crossing date line within this offset)
