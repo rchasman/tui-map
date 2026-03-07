@@ -333,9 +333,9 @@ struct RenderCache {
 /// Fine 0.1° tier (3600×1800) bitmap provides exact checks for coastal cells.
 /// Deep ocean/inland checks skip the fine tier entirely.
 pub struct LandGrid {
-    pub bitmap: Vec<u64>,
+    bitmap: Vec<u64>,
     /// Coarse 1° tier: 0=all water, 1=mixed, 2=all land
-    pub coarse: Vec<u8>,
+    coarse: Vec<u8>,
 }
 
 impl LandGrid {
@@ -699,8 +699,10 @@ impl MapRenderer {
         let fg_min_lat = (vp_min_lat - pad).max(-90.0);
         let fg_max_lat = (vp_max_lat + pad).min(90.0);
 
-        // Compute wrap offsets once per frame — skip ±360 when viewport doesn't cross dateline
-        let offsets = Self::needed_wrap_offsets(vp_min_lon, vp_max_lon);
+        // Compute wrap offsets once per frame — skip ±360 when viewport doesn't cross dateline.
+        // Must use padded bounds (fg_*) not viewport bounds, since the spatial query fetches
+        // features in the padded region and draw_linestring needs matching offsets to render them.
+        let offsets = Self::needed_wrap_offsets(fg_min_lon, fg_max_lon);
 
         // Check if we can use cached static layers
         let cache_key = RenderCacheKey::new(viewport.center_lon, viewport.center_lat, viewport.zoom, false, width, height, &self.settings);

@@ -219,7 +219,7 @@ fn bench_feature_grid(c: &mut Criterion) {
 // 7. LandGrid::is_land — two-tier lookup (fire spawn gatekeeper)
 // ---------------------------------------------------------------------------
 fn bench_land_grid(c: &mut Criterion) {
-    use tui_map::geo::{normalize_lon, normalize_lat};
+    use tui_map::geo::{normalize_lon, normalize_lat}; // used in normalize_only benchmark
 
     let mut group = c.benchmark_group("land_grid");
 
@@ -241,40 +241,11 @@ fn bench_land_grid(c: &mut Criterion) {
 
     let grid = LandGrid::from_polygons(&polygons);
 
-    // Verify coarse tier is populated correctly
+    // Verify grid is populated correctly via public API
     {
-        let mut water = 0usize;
-        let mut land = 0usize;
-        let mut mixed = 0usize;
-        for &v in &grid.coarse {
-            match v {
-                0 => water += 1,
-                2 => land += 1,
-                _ => mixed += 1,
-            }
-        }
-        eprintln!(
-            "  [land_grid coarse tier] water={water}, land={land}, mixed={mixed} (total={})",
-            water + land + mixed
-        );
-
-        // Spot-check: deep inland point
-        let c_lon = normalize_lon(-100.0) as usize;
-        let c_lat = normalize_lat(40.0) as usize;
-        let c_idx = c_lat * 360 + c_lon.min(359);
-        eprintln!(
-            "  [spot] (-100, 40) → coarse[{c_idx}] = {} (expect 2=land)",
-            grid.coarse[c_idx]
-        );
-
-        // Spot-check: deep ocean point
-        let c_lon = normalize_lon(-155.0) as usize;
-        let c_lat = normalize_lat(-55.0) as usize;
-        let c_idx = c_lat * 360 + c_lon.min(359);
-        eprintln!(
-            "  [spot] (-155, -55) → coarse[{c_idx}] = {} (expect 0=water)",
-            grid.coarse[c_idx]
-        );
+        assert!(grid.is_land(-100.0, 40.0), "(-100, 40) should be land (North America)");
+        assert!(!grid.is_land(-155.0, -55.0), "(-155, -55) should be water (Pacific)");
+        eprintln!("  [land_grid] spot-checks passed: inland=land, ocean=water");
     }
 
     // Generate points guaranteed in deep-inland coarse=2 cells (3° buffer from edges)
