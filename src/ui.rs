@@ -839,9 +839,12 @@ fn render_bio_explosion(exp: &ExplosionRender, x: u16, y: u16, area: Rect, globa
                 };
 
                 // Merge with existing bio content: keep brighter of overlapping blasts/clouds
-                if matches!(buf[(px, py)].symbol(), "▓" | "▒" | "░" | "█" | "☣") {
-                    if let Color::Rgb(_, eg, _) = buf[(px, py)].fg {
-                        if eg >= g { continue; }
+                {
+                    let cell = &buf[(px, py)];
+                    if matches!(cell.symbol(), "▓" | "▒" | "░" | "█" | "☣") {
+                        if let Color::Rgb(_, eg, _) = cell.fg {
+                            if eg >= g { continue; }
+                        }
                     }
                 }
                 buf[(px, py)].set_char(ch).set_fg(Color::Rgb(r, g, b));
@@ -1089,7 +1092,10 @@ fn render_gas_clouds_merged(clouds: &[GasCloudRender], area: Rect, global_frame:
     // Per-pixel density accumulation: (bio_density, chem_density)
     let mut density_buf = vec![(0.0f32, 0.0f32); w * h];
 
-    let is_globe = matches!(projection, Projection::Globe(_));
+    let globe = match projection {
+        Projection::Globe(g) => Some(g),
+        _ => None,
+    };
     let time_slow = global_frame / 180;
     let time_glacial = global_frame / 300;
 
@@ -1109,11 +1115,7 @@ fn render_gas_clouds_merged(clouds: &[GasCloudRender], area: Rect, global_frame:
 
         let radius_rad = cloud.radius_km / 6371.0;
 
-        let cloud_vec3 = if is_globe {
-            Some(lonlat_to_vec3(cloud.lon, cloud.lat))
-        } else {
-            None
-        };
+        let cloud_vec3 = globe.map(|_| lonlat_to_vec3(cloud.lon, cloud.lat));
 
         const N_LOBES: usize = 12;
         let mut lobe_factor = [0.0f32; N_LOBES];
@@ -1130,7 +1132,7 @@ fn render_gas_clouds_merged(clouds: &[GasCloudRender], area: Rect, global_frame:
             lobe_factor[i] = (0.55 + n * 0.4) * intensity_scale;
         }
 
-        let scan_r = if is_globe { r + r / 4 } else { r };
+        let scan_r = if globe.is_some() { r + r / 4 } else { r };
 
         for dy in -scan_r..=scan_r {
             let py_signed = cy as i16 + dy;
@@ -1150,23 +1152,19 @@ fn render_gas_clouds_merged(clouds: &[GasCloudRender], area: Rect, global_frame:
                 let t = lobe_frac * lobe_frac * (3.0 - 2.0 * lobe_frac);
                 let lobe_mult = lobe_factor[lobe_idx] * (1.0 - t) + lobe_factor[lobe_next] * t;
 
-                let dist_norm = if is_globe {
-                    if let Projection::Globe(ref g) = projection {
-                        let bx = (px as i32 - area.x as i32) * 2;
-                        let by = (py as i32 - area.y as i32) * 4;
-                        let point = match g.pixel_to_sphere_point(bx, by) {
-                            Some(p) => p,
-                            None => continue,
-                        };
-                        let cv = cloud_vec3.unwrap();
-                        let dot = cv.dot(point).clamp(-1.0, 1.0);
-                        let angle_dist = dot.acos();
-                        let effective_r = radius_rad * lobe_mult as f64;
-                        if effective_r < 0.0001 { continue; }
-                        (angle_dist / effective_r) as f32
-                    } else {
-                        unreachable!()
-                    }
+                let dist_norm = if let Some(g) = globe {
+                    let bx = (px as i32 - area.x as i32) * 2;
+                    let by = (py as i32 - area.y as i32) * 4;
+                    let point = match g.pixel_to_sphere_point(bx, by) {
+                        Some(p) => p,
+                        None => continue,
+                    };
+                    let cv = cloud_vec3.unwrap();
+                    let dot = cv.dot(point).clamp(-1.0, 1.0);
+                    let angle_dist = dot.acos();
+                    let effective_r = radius_rad * lobe_mult as f64;
+                    if effective_r < 0.0001 { continue; }
+                    (angle_dist / effective_r) as f32
                 } else {
                     let dist = ((dx * dx + dy * dy) as f32).sqrt();
                     let effective_r = r as f32 * lobe_mult;
@@ -1193,7 +1191,8 @@ fn render_gas_clouds_merged(clouds: &[GasCloudRender], area: Rect, global_frame:
                 let idx = (py - area.y) as usize * w + (px - area.x) as usize;
                 match cloud.weapon_type {
                     WeaponType::Bio => density_buf[idx].0 += density,
-                    _ => density_buf[idx].1 += density,
+                    WeaponType::Chem => density_buf[idx].1 += density,
+                    _ => {}
                 }
             }
         }
