@@ -949,19 +949,35 @@ impl MapRenderer {
                 }
             }
 
-            // Globe outline — only when sphere edge is visible in viewport
+            // Globe outline — midpoint circle (all-integer, zero trig)
             let globe_outline_rc = if globe.radius < (globe.width.min(globe.height) as f64 / 2.0) {
                 let mut outline = BrailleCanvas::new(width, height);
-                let cx = globe.width as f64 / 2.0;
-                let cy = globe.height as f64 / 2.0;
-                let r = globe.radius;
-                let circumference = 2.0 * std::f64::consts::PI * r;
-                let steps = (circumference * 0.5) as usize; // every other pixel for faintness
-                for i in 0..steps {
-                    let theta = 2.0 * std::f64::consts::PI * i as f64 / steps as f64;
-                    let x = (cx + r * theta.cos()) as usize;
-                    let y = (cy - r * theta.sin()) as usize;
-                    outline.set_pixel(x, y);
+                let cx = (globe.width as f64 / 2.0) as i32;
+                let cy = (globe.height as f64 / 2.0) as i32;
+                let r = globe.radius as i32;
+
+                let mut x = r;
+                let mut y = 0i32;
+                let mut err = 1 - r;
+                while x >= y {
+                    // Plot all 8 octants (every other pixel for faintness)
+                    if (x + y) & 1 == 0 {
+                        outline.set_pixel_signed(cx + x, cy + y);
+                        outline.set_pixel_signed(cx - x, cy + y);
+                        outline.set_pixel_signed(cx + x, cy - y);
+                        outline.set_pixel_signed(cx - x, cy - y);
+                        outline.set_pixel_signed(cx + y, cy + x);
+                        outline.set_pixel_signed(cx - y, cy + x);
+                        outline.set_pixel_signed(cx + y, cy - x);
+                        outline.set_pixel_signed(cx - y, cy - x);
+                    }
+                    y += 1;
+                    if err < 0 {
+                        err += 2 * y + 1;
+                    } else {
+                        x -= 1;
+                        err += 2 * (y - x) + 1;
+                    }
                 }
                 Some(Rc::new(outline))
             } else {
