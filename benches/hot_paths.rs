@@ -192,25 +192,59 @@ fn bench_feature_grid(c: &mut Criterion) {
     }
 
     // query_grid_wrapped pattern — bitset dedup (current implementation)
-    group.bench_function("query_wrapped_continental_bitset", |b| {
-        b.iter(|| {
-            let (min_lon, min_lat, max_lon, max_lat): (f64, f64, f64, f64) = (-30.0, 30.0, 60.0, 70.0);
-            let mut raw = Vec::new();
-            grid.query_into(min_lon.max(-180.0), min_lat, max_lon.min(180.0), max_lat, &mut raw);
-            let n = grid.num_features();
-            let mut seen = vec![0u64; (n + 63) / 64];
-            let mut unique = Vec::with_capacity(raw.len().min(n));
-            for idx in raw {
-                let word = idx / 64;
-                let bit = 1u64 << (idx % 64);
-                if seen[word] & bit == 0 {
-                    seen[word] |= bit;
-                    unique.push(idx);
+    for &(label, bounds) in &[
+        ("world_view", (-180.0, -85.0, 180.0, 85.0)),
+        ("continental", (-30.0, 30.0, 60.0, 70.0)),
+    ] {
+        group.bench_function(format!("query_wrapped_{label}_bitset"), |b| {
+            b.iter(|| {
+                let (min_lon, min_lat, max_lon, max_lat): (f64, f64, f64, f64) = bounds;
+                let mut raw = Vec::new();
+                grid.query_into(min_lon.max(-180.0), min_lat, max_lon.min(180.0), max_lat, &mut raw);
+                let n = grid.num_features();
+                let mut seen = vec![0u64; (n + 63) / 64];
+                let mut unique = Vec::with_capacity(raw.len().min(n));
+                for idx in raw {
+                    let word = idx / 64;
+                    let bit = 1u64 << (idx % 64);
+                    if seen[word] & bit == 0 {
+                        seen[word] |= bit;
+                        unique.push(idx);
+                    }
                 }
-            }
-            black_box(&unique);
+                black_box(&unique);
+            });
         });
-    });
+    }
+
+    // Same pattern with reused buffers (matches MapRenderer optimization)
+    for &(label, bounds) in &[
+        ("world_view", (-180.0, -85.0, 180.0, 85.0)),
+        ("continental", (-30.0, 30.0, 60.0, 70.0)),
+    ] {
+        group.bench_function(format!("query_wrapped_{label}_reused"), |b| {
+            let n = grid.num_features();
+            let mut raw = Vec::new();
+            let mut seen = vec![0u64; (n + 63) / 64];
+            b.iter(|| {
+                let (min_lon, min_lat, max_lon, max_lat): (f64, f64, f64, f64) = bounds;
+                raw.clear();
+                grid.query_into(min_lon.max(-180.0), min_lat, max_lon.min(180.0), max_lat, &mut raw);
+                let words = (n + 63) / 64;
+                seen[..words].fill(0);
+                let mut unique = Vec::with_capacity(raw.len().min(n));
+                for &idx in &raw {
+                    let word = idx / 64;
+                    let bit = 1u64 << (idx % 64);
+                    if seen[word] & bit == 0 {
+                        seen[word] |= bit;
+                        unique.push(idx);
+                    }
+                }
+                black_box(&unique);
+            });
+        });
+    }
 
     group.finish();
 }
@@ -698,6 +732,112 @@ fn bench_fire_map_clear(c: &mut Criterion) {
     group.finish();
 }
 
+// ---------------------------------------------------------------------------
+// 13. Gas cloud density buffer — per-frame allocation vs reuse
+// ---------------------------------------------------------------------------
+fn bench_gas_density_buf(c: &mut Criterion) {
+    let mut group = c.benchmark_group("gas_density_buf");
+
+    for &(w, h) in &[(200, 50), (400, 100)] {
+        let size = w * h;
+
+        // Allocating fresh each frame (old path)
+        group.bench_function(format!("{w}x{h}_alloc"), |b| {
+            b.iter(|| {
+                let buf = vec![(0.0f32, 0.0f32); size];
+                black_box(&buf);
+            });
+        });
+
+        // Clearing a reused buffer (new path)
+        let mut buf = vec![(0.0f32, 0.0f32); size];
+        group.bench_function(format!("{w}x{h}_reuse_clear"), |b| {
+            b.iter(|| {
+                for v in buf.iter_mut() {
+                    *v = (0.0, 0.0);
+                }
+                black_box(&buf);
+            });
+        });
+
+        // fill() approach for comparison
+        let mut buf2 = vec![(0.0f32, 0.0f32); size];
+        group.bench_function(format!("{w}x{h}_fill"), |b| {
+            b.iter(|| {
+                buf2.fill((0.0, 0.0));
+                black_box(&buf2);
+            });
+        });
+    }
+
+    group.finish();
+}
+
+// ---------------------------------------------------------------------------
+// 14. Globe outline — midpoint circle vs trig
+// ---------------------------------------------------------------------------
+fn bench_globe_outline(c: &mut Criterion) {
+    let mut group = c.benchmark_group("globe_outline");
+    let width = 200usize;
+    let height = 50usize;
+    let radius = 80.0f64;
+
+    // Trig-based (old path)
+    group.bench_function("trig", |b| {
+        b.iter(|| {
+            let mut canvas = BrailleCanvas::new(width, height);
+            let cx = width as f64;
+            let cy = height as f64 * 2.0;
+            let r = radius;
+            let circumference = 2.0 * std::f64::consts::PI * r;
+            let steps = (circumference * 0.5) as usize;
+            for i in 0..steps {
+                let theta = 2.0 * std::f64::consts::PI * i as f64 / steps as f64;
+                let x = (cx + r * theta.cos()) as usize;
+                let y = (cy - r * theta.sin()) as usize;
+                canvas.set_pixel(x, y);
+            }
+            black_box(&canvas);
+        });
+    });
+
+    // Midpoint circle (new path)
+    group.bench_function("midpoint", |b| {
+        b.iter(|| {
+            let mut canvas = BrailleCanvas::new(width, height);
+            let cx = width as i32;
+            let cy = height as i32 * 2;
+            let r = radius as i32;
+
+            let mut x = r;
+            let mut y = 0i32;
+            let mut err = 1 - r;
+            while x >= y {
+                if (x + y) & 1 == 0 {
+                    canvas.set_pixel_signed(cx + x, cy + y);
+                    canvas.set_pixel_signed(cx - x, cy + y);
+                    canvas.set_pixel_signed(cx + x, cy - y);
+                    canvas.set_pixel_signed(cx - x, cy - y);
+                    canvas.set_pixel_signed(cx + y, cy + x);
+                    canvas.set_pixel_signed(cx - y, cy + x);
+                    canvas.set_pixel_signed(cx + y, cy - x);
+                    canvas.set_pixel_signed(cx - y, cy - x);
+                }
+                y += 1;
+                if err < 0 {
+                    err += 2 * y + 1;
+                } else {
+                    x -= 1;
+                    err += 2 * (y - x) + 1;
+                }
+            }
+            black_box(&canvas);
+        });
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_set_pixel,
@@ -712,5 +852,7 @@ criterion_group!(
     bench_full_render,
     bench_real_data_render,
     bench_fire_map_clear,
+    bench_gas_density_buf,
+    bench_globe_outline,
 );
 criterion_main!(benches);
