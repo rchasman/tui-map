@@ -181,7 +181,8 @@ fn render_map(frame: &mut Frame, app: &mut App, area: Rect) {
         app.fire_map_dims = (fire_map_width, fire_map_height);
     } else {
         app.fire_map_intensity.fill(0);
-        app.fire_map_weapon.fill(WeaponType::Nuke);
+        // fire_map_weapon doesn't need clearing — only read at indices
+        // where fire_map_intensity > 0, and add_fire always writes both.
     }
 
     // Helper to merge fire into map (max intensity wins, keeps its weapon)
@@ -327,6 +328,17 @@ fn render_map(frame: &mut Frame, app: &mut App, area: Rect) {
         }
     };
 
+    // Resize reusable gas cloud density buffer if needed
+    let gas_w = inner.width as usize;
+    let gas_h = inner.height as usize;
+    let gas_size = gas_w * gas_h;
+    if app.gas_density_dims != (gas_w, gas_h) {
+        app.gas_density_buf = vec![(0.0f32, 0.0f32); gas_size];
+        app.gas_density_dims = (gas_w, gas_h);
+    } else {
+        app.gas_density_buf.fill((0.0, 0.0));
+    }
+
     // Render braille map
     let map_widget = MapWidget {
         layers,
@@ -337,6 +349,7 @@ fn render_map(frame: &mut Frame, app: &mut App, area: Rect) {
         explosions,
         fires,
         gas_clouds,
+        density_buf: &mut app.gas_density_buf,
         inner_width: inner.width,
         inner_height: inner.height,
         frame: app.frame,
@@ -388,6 +401,7 @@ struct MapWidget<'a> {
     explosions: Vec<ExplosionRender>,
     fires: Vec<FireRender>,
     gas_clouds: Vec<GasCloudRender>,
+    density_buf: &'a mut [(f32, f32)],
     inner_width: u16,
     inner_height: u16,
     frame: u64,
@@ -473,7 +487,7 @@ impl<'a> Widget for MapWidget<'a> {
         }
 
         // Render gas clouds — merged density so overlapping clouds blend
-        render_gas_clouds_merged(&self.gas_clouds, area, self.frame, buf, self.projection);
+        render_gas_clouds_merged(&self.gas_clouds, self.density_buf, area, self.frame, buf, self.projection);
 
         // City markers and labels — rendered ON TOP of fires so population
         // damage is visible through the flames
@@ -1083,14 +1097,11 @@ fn render_chem_explosion(exp: &ExplosionRender, x: u16, y: u16, area: Rect, glob
 /// Gas cloud: slow billowing noxious fog — neon green (Bio) or purple (Chem).
 /// On globe: uses geographic distance (great-circle) so the cloud conforms to the sphere.
 /// On mercator: uses screen-space distance (correct for flat projection).
-fn render_gas_clouds_merged(clouds: &[GasCloudRender], area: Rect, global_frame: u64, buf: &mut Buffer, projection: &Projection) {
+fn render_gas_clouds_merged(clouds: &[GasCloudRender], density_buf: &mut [(f32, f32)], area: Rect, global_frame: u64, buf: &mut Buffer, projection: &Projection) {
     if clouds.is_empty() { return; }
     let w = area.width as usize;
     let h = area.height as usize;
     if w == 0 || h == 0 { return; }
-
-    // Per-pixel density accumulation: (bio_density, chem_density)
-    let mut density_buf = vec![(0.0f32, 0.0f32); w * h];
 
     let globe = match projection {
         Projection::Globe(g) => Some(g),

@@ -183,6 +183,9 @@ pub struct App {
     pub fire_map_intensity: Vec<u8>,
     pub fire_map_weapon: Vec<WeaponType>,
     pub fire_map_dims: (usize, usize),
+    /// Reusable gas cloud density buffer (avoids per-frame allocation)
+    pub gas_density_buf: Vec<(f32, f32)>,
+    pub gas_density_dims: (usize, usize),
 }
 
 impl App {
@@ -214,6 +217,8 @@ impl App {
             fire_map_intensity: Vec::new(),
             fire_map_weapon: Vec::new(),
             fire_map_dims: (0, 0),
+            gas_density_buf: Vec::new(),
+            gas_density_dims: (0, 0),
         }
     }
 
