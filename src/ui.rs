@@ -655,10 +655,12 @@ fn render_nuke_explosion(exp: &ExplosionRender, x: u16, y: u16, area: Rect, glob
     let cap_height_f32 = cap_height as f32;
     let frame_seed_component = global_frame + exp.frame as u64;
 
-    for dy in -cap_height..0 {
-        let py_signed = (y as i16) + dy;
-        if py_signed < 0 || py_signed >= (area.y + area.height) as i16 { continue; }
-        let py = py_signed as u16;
+    // Clamp vertical loop to viewport
+    let dy_min = (-cap_height).max(-(y as i16));
+    let dy_max = (-1i16).min((area.y + area.height - 1) as i16 - y as i16);
+
+    for dy in dy_min..=dy_max {
+        let py = (y as i16 + dy) as u16;
 
         let dy_sq = dy * dy;
         let dy_f32 = dy as f32;
@@ -684,7 +686,10 @@ fn render_nuke_explosion(exp: &ExplosionRender, x: u16, y: u16, area: Rect, glob
             (height_ratio - 0.75) * height_mult
         };
 
-        for dx in -(radius_i16)..=(radius_i16) {
+        let dx_lo = (-radius_i16).max(-(x as i16));
+        let dx_hi = radius_i16.min((area.x + area.width - 1) as i16 - x as i16);
+
+        for dx in dx_lo..=dx_hi {
             let dist_sq = (dx * dx + dy_sq) as f32;
             let dx_f32 = dx as f32;
             let large_turb_seed = hash2((fast_pseudo_angle(dx_f32, dy_f32) * 1000.0) as u64, global_frame / 5);
@@ -698,9 +703,7 @@ fn render_nuke_explosion(exp: &ExplosionRender, x: u16, y: u16, area: Rect, glob
             let effective_width_sq = (cap_width * height_factor) * (cap_width * height_factor);
 
             if dist_sq <= effective_width_sq {
-                let px_signed = (x as i16) + dx;
-                if px_signed < 0 || px_signed >= (area.x + area.width) as i16 { continue; }
-                let px = px_signed as u16;
+                let px = (x as i16 + dx) as u16;
 
                 if let Some(g) = globe {
                     let bx = (px as i32 - area.x as i32) * 2;
@@ -780,16 +783,20 @@ fn render_bio_explosion(exp: &ExplosionRender, x: u16, y: u16, area: Rect, globa
     let dy_min = -cap_height;
     let dy_max = (cap_height / 3).max(2); // Small drip below
 
-    for dy in dy_min..=dy_max {
-        let py_signed = (y as i16) + dy;
-        if py_signed < 0 || py_signed >= (area.y + area.height) as i16 { continue; }
-        let py = py_signed as u16;
+    // Clamp loop bounds to viewport
+    let dy_lo = dy_min.max(-(y as i16));
+    let dy_hi = dy_max.min((area.y + area.height - 1) as i16 - y as i16);
+    let dx_lo = (-radius_i16).max(-(x as i16));
+    let dx_hi = radius_i16.min((area.x + area.width - 1) as i16 - x as i16);
+
+    for dy in dy_lo..=dy_hi {
+        let py = (y as i16 + dy) as u16;
 
         let dy_sq = dy * dy;
         let dy_f32 = dy as f32;
         let height_ratio = dy_f32.abs() / cap_height_f32;
 
-        for dx in -(radius_i16)..=(radius_i16) {
+        for dx in dx_lo..=dx_hi {
             let dist_sq = (dx * dx + dy_sq) as f32;
             let dx_f32 = dx as f32;
 
@@ -808,9 +815,7 @@ fn render_bio_explosion(exp: &ExplosionRender, x: u16, y: u16, area: Rect, globa
             let in_fog = dist_sq <= effective_width_sq * vert_falloff.max(0.0);
 
             if in_fog {
-                let px_signed = (x as i16) + dx;
-                if px_signed < 0 || px_signed >= (area.x + area.width) as i16 { continue; }
-                let px = px_signed as u16;
+                let px = (x as i16 + dx) as u16;
 
                 if let Some(g) = globe {
                     let bx = (px as i32 - area.x as i32) * 2;
@@ -890,18 +895,18 @@ fn render_emp_explosion(exp: &ExplosionRender, x: u16, y: u16, area: Rect, globa
         exp.radius as f64 / max_angle
     };
 
-    // Scan area covers full circle (above AND below cursor)
+    // Scan area covers full circle, clamped to viewport
     let scan_r = (max_r as i16) + 3;
+    let dy_lo = (-scan_r).max(-(y as i16));
+    let dy_hi = scan_r.min((area.y + area.height - 1) as i16 - y as i16);
+    let dx_lo = (-scan_r).max(-(x as i16));
+    let dx_hi = scan_r.min((area.x + area.width - 1) as i16 - x as i16);
 
-    for dy in -scan_r..=scan_r {
-        let py_signed = (y as i16) + dy;
-        if py_signed < 0 || py_signed >= (area.y + area.height) as i16 { continue; }
-        let py = py_signed as u16;
+    for dy in dy_lo..=dy_hi {
+        let py = (y as i16 + dy) as u16;
 
-        for dx in -scan_r..=scan_r {
-            let px_signed = (x as i16) + dx;
-            if px_signed < 0 || px_signed >= (area.x + area.width) as i16 { continue; }
-            let px = px_signed as u16;
+        for dx in dx_lo..=dx_hi {
+            let px = (x as i16 + dx) as u16;
 
             // Distance: geographic on globe (conforms to curvature), screen-space on Mercator
             let dist: f32 = if let Some(g) = globe {
@@ -1002,19 +1007,20 @@ fn render_chem_explosion(exp: &ExplosionRender, x: u16, y: u16, area: Rect, glob
     // Drip zone: extra chars trailing below the sphere
     let drip_extra = (max_r * 0.3) as i16;
 
-    for dy in -sphere_r..=(sphere_r + drip_extra) {
-        let py_signed = (y as i16) + dy;
-        if py_signed < 0 || py_signed >= (area.y + area.height) as i16 { continue; }
-        let py = py_signed as u16;
+    // Clamp loop bounds to viewport
+    let dy_lo = (-sphere_r).max(-(y as i16));
+    let dy_hi = (sphere_r + drip_extra).min((area.y + area.height - 1) as i16 - y as i16);
+    let dx_lo = (-radius_i16).max(-(x as i16));
+    let dx_hi = radius_i16.min((area.x + area.width - 1) as i16 - x as i16);
+
+    for dy in dy_lo..=dy_hi {
+        let py = (y as i16 + dy) as u16;
 
         let dy_sq = dy * dy;
         let is_drip_zone = dy > sphere_r;
 
-        for dx in -(radius_i16)..=(radius_i16) {
-            // Bounds check (moved up for globe path efficiency)
-            let px_signed = (x as i16) + dx;
-            if px_signed < 0 || px_signed >= (area.x + area.width) as i16 { continue; }
-            let px = px_signed as u16;
+        for dx in dx_lo..=dx_hi {
+            let px = (x as i16 + dx) as u16;
 
             // Distance: geographic on globe, screen-space on Mercator
             let dist: f32 = if let Some(g) = globe {
@@ -1145,15 +1151,22 @@ fn render_gas_clouds_merged(clouds: &[GasCloudRender], density_buf: &mut [(f32, 
 
         let scan_r = if globe.is_some() { r + r / 4 } else { r };
 
-        for dy in -scan_r..=scan_r {
-            let py_signed = cy as i16 + dy;
-            if py_signed < area.y as i16 || py_signed >= (area.y + area.height) as i16 { continue; }
-            let py = py_signed as u16;
+        // Clamp loop bounds to viewport — avoids iterating O(r²) pixels
+        // when cloud extends far beyond screen (e.g. low-zoom cloud viewed at high zoom)
+        let dy_min = (-scan_r).max(area.y as i16 - cy as i16);
+        let dy_max = scan_r.min((area.y + area.height - 1) as i16 - cy as i16);
+        let dx_min = (-scan_r).max(area.x as i16 - cx as i16);
+        let dx_max = scan_r.min((area.x + area.width - 1) as i16 - cx as i16);
 
-            for dx in -scan_r..=scan_r {
-                let px_signed = cx as i16 + dx;
-                if px_signed < area.x as i16 || px_signed >= (area.x + area.width) as i16 { continue; }
-                let px = px_signed as u16;
+        // Texture scale: ~8 features across cloud diameter regardless of zoom.
+        // Without this, pixel-level hash noise makes high-zoom edges look like static.
+        let tex_scale = (r as f32).max(1.0) / 8.0;
+
+        for dy in dy_min..=dy_max {
+            let py = (cy as i16 + dy) as u16;
+
+            for dx in dx_min..=dx_max {
+                let px = (cx as i16 + dx) as u16;
 
                 let angle_norm = fast_pseudo_angle(dx as f32, dy as f32) / 4.0;
                 let lobe_pos = angle_norm * N_LOBES as f32;
@@ -1185,10 +1198,13 @@ fn render_gas_clouds_merged(clouds: &[GasCloudRender], density_buf: &mut [(f32, 
 
                 if dist_norm > 1.0 { continue; }
 
-                // Per-cloud texture with cloud_id for distinct edge patterns
+                // Texture scaled to cloud radius — consistent geographic-scale features
+                // across zoom levels. Without this, edges dissolve into pixel noise at high zoom.
+                let tex_x = (dx as f32 / tex_scale) as i64;
+                let tex_y = (dy as f32 / tex_scale) as i64;
                 let tex_key = hash3(
-                    (px as u64).wrapping_mul(31337) ^ cloud_id,
-                    (py as u64).wrapping_mul(7919),
+                    tex_x as u64 ^ cloud_id,
+                    tex_y as u64,
                     time_glacial,
                 );
                 let texture = ((tex_key & 0xFF) as f32 / 255.0 - 0.5) * 0.15;
