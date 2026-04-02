@@ -520,6 +520,9 @@ pub struct MapRenderer {
     pub city_grid: SpatialGrid<City>,
     pub settings: DisplaySettings,
     cache: RefCell<Option<RenderCache>>,
+    /// Reusable buffers for query_grid_wrapped (avoids per-call allocation)
+    query_raw: RefCell<Vec<usize>>,
+    query_seen: RefCell<Vec<u64>>,
     // Conservative-approximation spatial indexes for O(1) viewport queries
     coastline_grid_low: FeatureGrid,
     coastline_grid_medium: FeatureGrid,
@@ -547,6 +550,8 @@ impl MapRenderer {
             city_grid: SpatialGrid::new(10.0),
             settings: DisplaySettings::default(),
             cache: RefCell::new(None),
+            query_raw: RefCell::new(Vec::new()),
+            query_seen: RefCell::new(Vec::new()),
             coastline_grid_low: FeatureGrid::new(5.0),
             coastline_grid_medium: FeatureGrid::new(5.0),
             coastline_grid_high: FeatureGrid::new(5.0),
@@ -633,8 +638,10 @@ impl MapRenderer {
 
     /// Query a FeatureGrid with date-line wrapping support.
     /// Returns deduplicated feature indices using O(n) bitset instead of O(n log n) sort.
-    fn query_grid_wrapped(grid: &FeatureGrid, min_lon: f64, min_lat: f64, max_lon: f64, max_lat: f64) -> Vec<usize> {
-        let mut raw = Vec::new();
+    /// Reuses internal buffers to avoid per-call heap allocation.
+    fn query_grid_wrapped(&self, grid: &FeatureGrid, min_lon: f64, min_lat: f64, max_lon: f64, max_lat: f64) -> Vec<usize> {
+        let mut raw = self.query_raw.borrow_mut();
+        raw.clear();
         grid.query_into(min_lon.max(-180.0), min_lat, max_lon.min(180.0), max_lat, &mut raw);
         if min_lon < -180.0 {
             grid.query_into(min_lon + 360.0, min_lat, 180.0, max_lat, &mut raw);
@@ -645,11 +652,14 @@ impl MapRenderer {
         // O(n) dedup via bitset — each feature index is dense in [0, num_features)
         let n = grid.num_features();
         if n == 0 {
-            return raw;
+            return raw.clone();
         }
-        let mut seen = vec![0u64; (n + 63) / 64];
+        let mut seen = self.query_seen.borrow_mut();
+        let words_needed = (n + 63) / 64;
+        seen.resize(words_needed, 0);
+        seen[..words_needed].fill(0);
         let mut unique = Vec::with_capacity(raw.len().min(n));
-        for idx in raw {
+        for &idx in raw.iter() {
             let word = idx / 64;
             let bit = 1u64 << (idx % 64);
             if seen[word] & bit == 0 {
@@ -775,7 +785,7 @@ impl MapRenderer {
             if self.settings.show_coastlines {
                 let coastlines = self.get_coastlines(lod);
                 let grid = self.get_coastline_grid(lod);
-                let candidates = Self::query_grid_wrapped(grid, fg_min_lon, fg_min_lat, fg_max_lon, fg_max_lat);
+                let candidates = self.query_grid_wrapped(grid, fg_min_lon, fg_min_lat, fg_max_lon, fg_max_lat);
                 for &idx in &candidates {
                     self.draw_linestring(&mut coastlines_canvas, &coastlines[idx], viewport, offsets);
                 }
@@ -784,20 +794,20 @@ impl MapRenderer {
             if self.settings.show_borders {
                 let borders = self.get_borders(lod);
                 let grid = self.get_border_grid(lod);
-                let candidates = Self::query_grid_wrapped(grid, fg_min_lon, fg_min_lat, fg_max_lon, fg_max_lat);
+                let candidates = self.query_grid_wrapped(grid, fg_min_lon, fg_min_lat, fg_max_lon, fg_max_lat);
                 for &idx in &candidates {
                     self.draw_linestring(&mut borders_canvas, &borders[idx], viewport, offsets);
                 }
 
                 if self.settings.show_states && viewport.zoom >= 4.0 {
-                    let candidates = Self::query_grid_wrapped(&self.state_grid, fg_min_lon, fg_min_lat, fg_max_lon, fg_max_lat);
+                    let candidates = self.query_grid_wrapped(&self.state_grid, fg_min_lon, fg_min_lat, fg_max_lon, fg_max_lat);
                     for &idx in &candidates {
                         self.draw_linestring(&mut states_canvas, &self.states[idx], viewport, offsets);
                     }
                 }
 
                 if self.settings.show_counties && viewport.zoom >= 7.0 {
-                    let candidates = Self::query_grid_wrapped(&self.county_grid, fg_min_lon, fg_min_lat, fg_max_lon, fg_max_lat);
+                    let candidates = self.query_grid_wrapped(&self.county_grid, fg_min_lon, fg_min_lat, fg_max_lon, fg_max_lat);
                     for &idx in &candidates {
                         self.draw_linestring(&mut counties_canvas, &self.counties[idx], viewport, offsets);
                     }
@@ -910,7 +920,7 @@ impl MapRenderer {
             if self.settings.show_coastlines {
                 let coastlines = self.get_coastlines(lod);
                 let grid = self.get_coastline_grid(lod);
-                let candidates = Self::query_grid_wrapped(grid, fg_min_lon, fg_min_lat, fg_max_lon, fg_max_lat);
+                let candidates = self.query_grid_wrapped(grid, fg_min_lon, fg_min_lat, fg_max_lon, fg_max_lat);
                 for &idx in &candidates {
                     self.draw_linestring_globe(&mut coastlines_canvas, &coastlines[idx], globe);
                 }
@@ -919,20 +929,20 @@ impl MapRenderer {
             if self.settings.show_borders {
                 let borders = self.get_borders(lod);
                 let grid = self.get_border_grid(lod);
-                let candidates = Self::query_grid_wrapped(grid, fg_min_lon, fg_min_lat, fg_max_lon, fg_max_lat);
+                let candidates = self.query_grid_wrapped(grid, fg_min_lon, fg_min_lat, fg_max_lon, fg_max_lat);
                 for &idx in &candidates {
                     self.draw_linestring_globe(&mut borders_canvas, &borders[idx], globe);
                 }
 
                 if self.settings.show_states && zoom >= 1.5 {
-                    let candidates = Self::query_grid_wrapped(&self.state_grid, fg_min_lon, fg_min_lat, fg_max_lon, fg_max_lat);
+                    let candidates = self.query_grid_wrapped(&self.state_grid, fg_min_lon, fg_min_lat, fg_max_lon, fg_max_lat);
                     for &idx in &candidates {
                         self.draw_linestring_globe(&mut states_canvas, &self.states[idx], globe);
                     }
                 }
 
                 if self.settings.show_counties && zoom >= 3.5 {
-                    let candidates = Self::query_grid_wrapped(&self.county_grid, fg_min_lon, fg_min_lat, fg_max_lon, fg_max_lat);
+                    let candidates = self.query_grid_wrapped(&self.county_grid, fg_min_lon, fg_min_lat, fg_max_lon, fg_max_lat);
                     for &idx in &candidates {
                         self.draw_linestring_globe(&mut counties_canvas, &self.counties[idx], globe);
                     }
