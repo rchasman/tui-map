@@ -2,7 +2,7 @@ use crate::app::WeaponType;
 use crate::hash::{hash2, hash3};
 use crate::map::Projection;
 use crate::map::globe::lonlat_to_vec3;
-use super::{GasCloudRender, fast_pseudo_angle};
+use super::{GasCloudRender, fast_pseudo_angle, fast_acos_approx};
 use ratatui::{buffer::Buffer, layout::Rect, style::Color};
 
 /// Gas cloud: slow billowing noxious fog — neon green (Bio) or purple (Chem).
@@ -90,10 +90,9 @@ pub fn render_merged(clouds: &[GasCloudRender], density_buf: &mut [(f32, f32)], 
                     };
                     let cv = cloud_vec3.unwrap();
                     let dot = cv.dot(point).clamp(-1.0, 1.0);
-                    let angle_dist = dot.acos();
                     let effective_r = radius_rad * lobe_mult as f64;
                     if effective_r < 0.0001 { continue; }
-                    (angle_dist / effective_r) as f32
+                    (fast_acos_approx(dot) / effective_r) as f32
                 } else {
                     let dist = ((dx * dx + dy * dy) as f32).sqrt();
                     let effective_r = r as f32 * lobe_mult;

@@ -1,7 +1,7 @@
 use crate::hash::hash3;
 use crate::map::GlobeViewport;
 use crate::map::globe::lonlat_to_vec3;
-use super::ExplosionRender;
+use super::{ExplosionRender, fast_acos_approx};
 use ratatui::{buffer::Buffer, layout::Rect, style::Color};
 
 /// EMP: expanding concentric rings — electric blue/cyan, fast, short duration
@@ -48,7 +48,7 @@ pub fn render(exp: &ExplosionRender, x: u16, y: u16, area: Rect, global_frame: u
                     None => continue, // outside globe disk
                     Some(p) => {
                         let dot = p.dot(center_vec).clamp(-1.0, 1.0);
-                        (dot.acos() * geo_scale) as f32
+                        (fast_acos_approx(dot) * geo_scale) as f32
                     }
                 }
             } else {
