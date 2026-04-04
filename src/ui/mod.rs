@@ -253,19 +253,21 @@ fn render_map(frame: &mut Frame, app: &mut App, area: Rect) {
             _ => 0,
         };
 
-        let mut fires_data = grid.fires_in_region(
+        app.fires_region_buf.clear();
+        grid.fires_in_region_into(
             vp_min_lon.max(-180.0), vp_min_lat, vp_max_lon.min(180.0), vp_max_lat,
+            &mut app.fires_region_buf,
         );
         if !is_globe {
             if vp_min_lon < -180.0 {
-                fires_data.extend(grid.fires_in_region(vp_min_lon + 360.0, vp_min_lat, 180.0, vp_max_lat));
+                grid.fires_in_region_into(vp_min_lon + 360.0, vp_min_lat, 180.0, vp_max_lat, &mut app.fires_region_buf);
             }
             if vp_max_lon > 180.0 {
-                fires_data.extend(grid.fires_in_region(-180.0, vp_min_lat, vp_max_lon - 360.0, vp_max_lat));
+                grid.fires_in_region_into(-180.0, vp_min_lat, vp_max_lon - 360.0, vp_max_lat, &mut app.fires_region_buf);
             }
         }
 
-        for (lon, lat, intensity, weapon) in fires_data {
+        for &(lon, lat, intensity, weapon) in &app.fires_region_buf {
             if let Some((px, py)) = projection.project_point(lon, lat) {
                 let cx = (px / 2) as i32;
                 let cy = (py / 4) as i32;

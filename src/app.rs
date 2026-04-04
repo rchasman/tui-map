@@ -120,9 +120,9 @@ impl FireGrid {
         }
     }
 
-    /// Query fires within viewport bounds only (not all cells).
-    /// Returns (lon, lat, intensity, weapon_type) at cell centers.
-    pub fn fires_in_region(&self, min_lon: f64, min_lat: f64, max_lon: f64, max_lat: f64) -> Vec<(f64, f64, u8, WeaponType)> {
+    /// Append fires within viewport bounds into `results` buffer.
+    /// Pushes (lon, lat, intensity, weapon_type) at cell centers.
+    pub fn fires_in_region_into(&self, min_lon: f64, min_lat: f64, max_lon: f64, max_lat: f64, results: &mut Vec<(f64, f64, u8, WeaponType)>) {
         let min_x = ((min_lon + 180.0).max(0.0) / self.resolution) as usize;
         let max_x = (((max_lon + 180.0).min(360.0)) / self.resolution).ceil() as usize;
         let min_y = ((min_lat + 90.0).max(0.0) / self.resolution) as usize;
@@ -131,7 +131,6 @@ impl FireGrid {
         let max_x = max_x.min(self.width);
         let max_y = max_y.min(self.height);
 
-        let mut results = Vec::new();
         for lat_idx in min_y..max_y {
             let row_start = lat_idx * self.width;
             for lon_idx in min_x..max_x {
@@ -144,7 +143,6 @@ impl FireGrid {
                 }
             }
         }
-        results
     }
 }
 
@@ -186,6 +184,8 @@ pub struct App {
     /// Reusable gas cloud density buffer (avoids per-frame allocation)
     pub gas_density_buf: Vec<(f32, f32)>,
     pub gas_density_dims: (usize, usize),
+    /// Reusable buffer for fires_in_region queries (avoids per-frame allocation)
+    pub fires_region_buf: Vec<(f64, f64, u8, WeaponType)>,
 }
 
 impl App {
@@ -219,6 +219,7 @@ impl App {
             fire_map_dims: (0, 0),
             gas_density_buf: Vec::new(),
             gas_density_dims: (0, 0),
+            fires_region_buf: Vec::new(),
         }
     }
 
@@ -663,7 +664,7 @@ impl App {
         let height = self.fire_grid_fine.height;
 
         for idx in 0..self.map_renderer.city_grid.len() {
-            let (pop, orig_pop) = {
+            let (pop, orig_pop, cx, cy) = {
                 let city = match self.map_renderer.city_grid.get(idx) {
                     Some(c) => c,
                     None => continue,
@@ -671,12 +672,13 @@ impl App {
                 if city.population == 0 {
                     continue;
                 }
-                (city.population, city.original_population)
+                (
+                    city.population,
+                    city.original_population,
+                    (normalize_lon(city.lon) / res) as i32,
+                    (normalize_lat(city.lat) / res) as i32,
+                )
             };
-
-            // Probe 3×3 neighborhood — weight by intensity instead of binary count
-            let cx = (normalize_lon(self.map_renderer.city_grid.get(idx).unwrap().lon) / res) as i32;
-            let cy = (normalize_lat(self.map_renderer.city_grid.get(idx).unwrap().lat) / res) as i32;
 
             let mut intensity_sum = 0.0f64;
             for dy in -1i32..=1 {
