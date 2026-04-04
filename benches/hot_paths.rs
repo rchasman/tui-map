@@ -596,7 +596,8 @@ fn bench_real_data_render(c: &mut Criterion) {
     let width = 200usize;
     let height = 50usize;
 
-    // Mercator at various zoom levels
+    // Mercator at various zoom levels — cache invalidated each iteration
+    // to measure actual rendering cost, not cache-hit latency
     for &(label, zoom, center_lon, center_lat) in &[
         ("world_1x", 1.0, 0.0, 20.0),
         ("europe_4x", 4.0, 15.0, 50.0),
@@ -608,6 +609,7 @@ fn bench_real_data_render(c: &mut Criterion) {
                 Viewport::new(center_lon, center_lat, zoom, width * 2, height * 4),
             );
             b.iter(|| {
+                renderer.invalidate_cache();
                 black_box(renderer.render(width, height, &projection));
             });
         });
@@ -624,6 +626,7 @@ fn bench_real_data_render(c: &mut Criterion) {
                 GlobeViewport::new(center_lon, center_lat, width as f64 * 0.35 * zoom, width * 2, height * 4),
             );
             b.iter(|| {
+                renderer.invalidate_cache();
                 black_box(renderer.render(width, height, &projection));
             });
         });
