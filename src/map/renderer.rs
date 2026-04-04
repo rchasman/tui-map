@@ -817,21 +817,29 @@ impl MapRenderer {
             let (coastlines_canvas, borders_canvas, states_canvas, counties_canvas) = if total_candidates > PAR_THRESHOLD {
                 let ((a, b), (c, d)) = rayon::join(
                     || rayon::join(
-                        || render_candidates_mercator(&coast_candidates, coastlines, width, height, viewport, offsets),
-                        || render_candidates_mercator(&border_candidates, borders, width, height, viewport, offsets),
+                        || render_candidates(&coast_candidates, coastlines, width, height,
+                            |c, line| draw_linestring_mercator(c, line, viewport, offsets)),
+                        || render_candidates(&border_candidates, borders, width, height,
+                            |c, line| draw_linestring_mercator(c, line, viewport, offsets)),
                     ),
                     || rayon::join(
-                        || render_candidates_mercator(&state_candidates, states, width, height, viewport, offsets),
-                        || render_candidates_mercator(&county_candidates, counties, width, height, viewport, offsets),
+                        || render_candidates(&state_candidates, states, width, height,
+                            |c, line| draw_linestring_mercator(c, line, viewport, offsets)),
+                        || render_candidates(&county_candidates, counties, width, height,
+                            |c, line| draw_linestring_mercator(c, line, viewport, offsets)),
                     ),
                 );
                 (a, b, c, d)
             } else {
                 (
-                    render_candidates_mercator(&coast_candidates, coastlines, width, height, viewport, offsets),
-                    render_candidates_mercator(&border_candidates, borders, width, height, viewport, offsets),
-                    render_candidates_mercator(&state_candidates, states, width, height, viewport, offsets),
-                    render_candidates_mercator(&county_candidates, counties, width, height, viewport, offsets),
+                    render_candidates(&coast_candidates, coastlines, width, height,
+                            |c, line| draw_linestring_mercator(c, line, viewport, offsets)),
+                    render_candidates(&border_candidates, borders, width, height,
+                            |c, line| draw_linestring_mercator(c, line, viewport, offsets)),
+                    render_candidates(&state_candidates, states, width, height,
+                            |c, line| draw_linestring_mercator(c, line, viewport, offsets)),
+                    render_candidates(&county_candidates, counties, width, height,
+                            |c, line| draw_linestring_mercator(c, line, viewport, offsets)),
                 )
             };
 
@@ -963,21 +971,29 @@ impl MapRenderer {
             let (coastlines_canvas, borders_canvas, states_canvas, counties_canvas) = if total_candidates > PAR_THRESHOLD {
                 let ((a, b), (c, d)) = rayon::join(
                     || rayon::join(
-                        || render_candidates_globe(&coast_candidates, coastlines, width, height, globe),
-                        || render_candidates_globe(&border_candidates, borders, width, height, globe),
+                        || render_candidates(&coast_candidates, coastlines, width, height,
+                            |c, line| draw_linestring_on_globe(c, line, globe)),
+                        || render_candidates(&border_candidates, borders, width, height,
+                            |c, line| draw_linestring_on_globe(c, line, globe)),
                     ),
                     || rayon::join(
-                        || render_candidates_globe(&state_candidates, states, width, height, globe),
-                        || render_candidates_globe(&county_candidates, counties, width, height, globe),
+                        || render_candidates(&state_candidates, states, width, height,
+                            |c, line| draw_linestring_on_globe(c, line, globe)),
+                        || render_candidates(&county_candidates, counties, width, height,
+                            |c, line| draw_linestring_on_globe(c, line, globe)),
                     ),
                 );
                 (a, b, c, d)
             } else {
                 (
-                    render_candidates_globe(&coast_candidates, coastlines, width, height, globe),
-                    render_candidates_globe(&border_candidates, borders, width, height, globe),
-                    render_candidates_globe(&state_candidates, states, width, height, globe),
-                    render_candidates_globe(&county_candidates, counties, width, height, globe),
+                    render_candidates(&coast_candidates, coastlines, width, height,
+                            |c, line| draw_linestring_on_globe(c, line, globe)),
+                    render_candidates(&border_candidates, borders, width, height,
+                            |c, line| draw_linestring_on_globe(c, line, globe)),
+                    render_candidates(&state_candidates, states, width, height,
+                            |c, line| draw_linestring_on_globe(c, line, globe)),
+                    render_candidates(&county_candidates, counties, width, height,
+                            |c, line| draw_linestring_on_globe(c, line, globe)),
                 )
             };
 
@@ -1264,51 +1280,23 @@ impl Default for MapRenderer {
 /// Below this threshold, sequential is faster due to rayon scheduling overhead.
 const PAR_THRESHOLD: usize = 2000;
 
-/// Render candidates for a Mercator layer. Uses intra-layer parallelism
-/// via chunk-split + merge when candidates exceed PAR_THRESHOLD.
-fn render_candidates_mercator(
+/// Render a set of feature candidates into a BrailleCanvas.
+/// Uses intra-layer parallelism (par_chunks + merge) when candidates exceed PAR_THRESHOLD.
+fn render_candidates<F>(
     candidates: &[usize], features: &[LineString],
     width: usize, height: usize,
-    viewport: &Viewport, offsets: &[f64],
-) -> BrailleCanvas {
+    draw: F,
+) -> BrailleCanvas
+where
+    F: Fn(&mut BrailleCanvas, &LineString) + Sync,
+{
     if candidates.is_empty() {
         return BrailleCanvas::new(width, height);
     }
     if candidates.len() < PAR_THRESHOLD {
         let mut c = BrailleCanvas::new(width, height);
         for &idx in candidates {
-            draw_linestring_mercator(&mut c, &features[idx], viewport, offsets);
-        }
-        return c;
-    }
-    // Split into chunks, render in parallel, merge via OR
-    use rayon::prelude::*;
-    let n_chunks = rayon::current_num_threads().min(candidates.len() / 500).max(2);
-    let chunk_size = (candidates.len() + n_chunks - 1) / n_chunks;
-    candidates.par_chunks(chunk_size)
-        .map(|chunk| {
-            let mut c = BrailleCanvas::new(width, height);
-            for &idx in chunk {
-                draw_linestring_mercator(&mut c, &features[idx], viewport, offsets);
-            }
-            c
-        })
-        .reduce(|| BrailleCanvas::new(width, height), |mut a, b| { a.merge_or(&b); a })
-}
-
-/// Render candidates for a globe layer. Same strategy as Mercator.
-fn render_candidates_globe(
-    candidates: &[usize], features: &[LineString],
-    width: usize, height: usize,
-    globe: &GlobeViewport,
-) -> BrailleCanvas {
-    if candidates.is_empty() {
-        return BrailleCanvas::new(width, height);
-    }
-    if candidates.len() < PAR_THRESHOLD {
-        let mut c = BrailleCanvas::new(width, height);
-        for &idx in candidates {
-            draw_linestring_on_globe(&mut c, &features[idx], globe);
+            draw(&mut c, &features[idx]);
         }
         return c;
     }
@@ -1319,7 +1307,7 @@ fn render_candidates_globe(
         .map(|chunk| {
             let mut c = BrailleCanvas::new(width, height);
             for &idx in chunk {
-                draw_linestring_on_globe(&mut c, &features[idx], globe);
+                draw(&mut c, &features[idx]);
             }
             c
         })
@@ -1353,30 +1341,22 @@ fn draw_linestring_mercator_offset(canvas: &mut BrailleCanvas, line: &LineString
         return;
     }
 
-    // Sub-pixel vertex skip: estimate screen distance from Mercator distance.
-    // If two consecutive vertices are < 1 pixel apart, skip the projection
-    // entirely. At world view, this eliminates 80%+ of vertices from high-res
-    // datasets. The visual result is identical — skipped vertices would produce
-    // 0-pixel Bresenham segments.
+    // Sub-pixel vertex skip: consecutive vertices within 1 pixel in Mercator
+    // space can't produce visible Bresenham output, so skip projection entirely.
     let merc_pixel_threshold = 1.5 / viewport.scale;
 
-    let mut prev: Option<(i32, i32)> = None;
-    let mut prev_mx = f64::NAN;
-    let mut prev_my = f64::NAN;
+    let mut prev: Option<((i32, i32), f64, f64)> = None;
 
     for &(mx, my) in &line.mercator {
-        // Skip vertices that would land within 1 pixel of the previous one
-        if prev.is_some() {
-            let dmx = (mx - prev_mx).abs();
-            let dmy = (my - prev_my).abs();
-            if dmx < merc_pixel_threshold && dmy < merc_pixel_threshold {
-                continue; // sub-pixel — skip projection + draw entirely
+        if let Some((_, pmx, pmy)) = prev {
+            if (mx - pmx).abs() < merc_pixel_threshold && (my - pmy).abs() < merc_pixel_threshold {
+                continue;
             }
         }
 
         let (px, py) = viewport.project_mercator(mx, my, lon_offset);
 
-        if let Some((prev_x, prev_y)) = prev {
+        if let Some(((prev_x, prev_y), _, _)) = prev {
             let dx = (px - prev_x).abs();
             let dy = (py - prev_y).abs();
             let dist = (dx + dy) as usize;
@@ -1386,9 +1366,7 @@ fn draw_linestring_mercator_offset(canvas: &mut BrailleCanvas, line: &LineString
             }
         }
 
-        prev = Some((px, py));
-        prev_mx = mx;
-        prev_my = my;
+        prev = Some(((px, py), mx, my));
     }
 }
 
