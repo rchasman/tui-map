@@ -1,6 +1,8 @@
 pub mod nuke;
 pub mod bio;
 pub mod emp;
+pub mod water;
+pub mod life;
 pub mod chem;
 pub mod gas_clouds;
 
@@ -51,6 +53,8 @@ pub fn weapon_color(weapon: WeaponType) -> Color {
         WeaponType::Nuke => Color::Red,
         WeaponType::Bio => Color::Rgb(0, 255, 50),
         WeaponType::Emp => Color::Rgb(0, 200, 255),
+        WeaponType::Water => Color::Rgb(30, 144, 255),
+        WeaponType::Life => Color::Rgb(50, 205, 50),
         WeaponType::Chem => Color::Rgb(200, 0, 200),
     }
 }
@@ -61,6 +65,8 @@ pub fn render_explosion(exp: &ExplosionRender, x: u16, y: u16, area: Rect, globa
         WeaponType::Nuke => nuke::render(exp, x, y, area, global_frame, buf, globe),
         WeaponType::Bio => bio::render(exp, x, y, area, global_frame, buf, globe),
         WeaponType::Emp => emp::render(exp, x, y, area, global_frame, buf, globe),
+        WeaponType::Water => water::render(exp, x, y, area, global_frame, buf, globe),
+        WeaponType::Life => life::render(exp, x, y, area, global_frame, buf, globe),
         WeaponType::Chem => chem::render(exp, x, y, area, global_frame, buf, globe),
     }
 }

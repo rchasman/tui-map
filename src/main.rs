@@ -138,6 +138,8 @@ fn run(terminal: &mut DefaultTerminal) -> Result<()> {
                             KeyCode::Char('2') => app.select_weapon(WeaponType::Bio),
                             KeyCode::Char('3') => app.select_weapon(WeaponType::Emp),
                             KeyCode::Char('4') => app.select_weapon(WeaponType::Chem),
+                            KeyCode::Char('5') => app.select_weapon(WeaponType::Water),
+                            KeyCode::Char('6') => app.select_weapon(WeaponType::Life),
 
                             // Launch weapon at cursor
                             KeyCode::Char(' ') => {

@@ -8,6 +8,8 @@ pub enum WeaponType {
     Nuke,
     Bio,
     Emp,
+    Water,
+    Life,
     Chem,
 }
 
@@ -15,6 +17,8 @@ impl WeaponType {
     pub fn max_frames(self) -> u8 {
         match self {
             WeaponType::Emp => 30,
+            WeaponType::Water => 45,
+            WeaponType::Life => 50,
             _ => 60,
         }
     }
@@ -24,6 +28,8 @@ impl WeaponType {
             WeaponType::Nuke => "☢",
             WeaponType::Bio => "☣",
             WeaponType::Emp => "⚡",
+            WeaponType::Water => "≋",
+            WeaponType::Life => "❀",
             WeaponType::Chem => "☠",
         }
     }
@@ -33,8 +39,15 @@ impl WeaponType {
             WeaponType::Nuke => "NUKE",
             WeaponType::Bio => "BIO",
             WeaponType::Emp => "EMP",
+            WeaponType::Water => "WATER",
+            WeaponType::Life => "LIFE",
             WeaponType::Chem => "CHEM",
         }
+    }
+
+    /// Whether this weapon is restorative (heals rather than destroys)
+    pub fn is_restorative(self) -> bool {
+        matches!(self, WeaponType::Water | WeaponType::Life)
     }
 }
 
@@ -380,6 +393,16 @@ impl App {
             weapon_type: weapon,
         });
 
+        // Restorative weapons: heal instead of destroy
+        if weapon.is_restorative() {
+            match weapon {
+                WeaponType::Water => self.apply_water_effect(lon, lat, radius_km),
+                WeaponType::Life => self.apply_life_effect(lon, lat, radius_km),
+                _ => unreachable!(),
+            }
+            return;
+        }
+
         // Spawn gas clouds (Bio and Chem)
         match weapon {
             WeaponType::Bio | WeaponType::Chem => {
@@ -517,6 +540,68 @@ impl App {
 
                     city.set_population(city.population.saturating_sub(killed));
                     self.casualties += killed;
+                }
+            }
+        }
+    }
+
+    /// Water: extinguish fires, clear fallout and gas clouds in the blast area
+    fn apply_water_effect(&mut self, lon: f64, lat: f64, radius_km: f64) {
+        let radius_deg = radius_km / 111.0;
+        let cos_lat = lat.to_radians().cos().max(0.1);
+
+        // Extinguish fires within radius
+        self.fires.retain(|fire| {
+            let dlat = (fire.lat - lat).abs();
+            let dlon = (fire.lon - lon).abs() * cos_lat;
+            dlat * dlat + dlon * dlon > radius_deg * radius_deg
+        });
+
+        // Clear fallout zones that overlap
+        for zone in &mut self.fallout {
+            let dist = fast_distance_km(lon, lat, zone.lon, zone.lat);
+            if dist < radius_km + zone.radius_km {
+                let overlap = 1.0 - (dist / (radius_km + zone.radius_km));
+                let reduction = (zone.intensity as f64 * overlap * 0.8) as u16;
+                zone.intensity = zone.intensity.saturating_sub(reduction);
+            }
+        }
+        self.fallout.retain(|z| z.intensity > 0);
+
+        // Clear gas clouds that overlap
+        for cloud in &mut self.gas_clouds {
+            let dist = fast_distance_km(lon, lat, cloud.lon, cloud.lat);
+            if dist < radius_km + cloud.current_radius_km {
+                let overlap = 1.0 - (dist / (radius_km + cloud.current_radius_km));
+                let reduction = (cloud.intensity as f64 * overlap * 0.8) as u16;
+                cloud.intensity = cloud.intensity.saturating_sub(reduction);
+            }
+        }
+        self.gas_clouds.retain(|c| c.intensity > 0);
+    }
+
+    /// Life: restore population to damaged cities in the blast area
+    fn apply_life_effect(&mut self, lon: f64, lat: f64, radius_km: f64) {
+        let query_radius_degrees = (radius_km + 50.0) / 111.0;
+        let candidate_indices = self.map_renderer.city_grid.query_radius(lon, lat, query_radius_degrees);
+
+        for &idx in &candidate_indices {
+            if let Some(city) = self.map_renderer.city_grid.get_mut(idx) {
+                if city.population >= city.original_population {
+                    continue;
+                }
+
+                let dist = fast_distance_km(lon, lat, city.lon, city.lat);
+                if dist < radius_km + city.radius_km {
+                    let normalized = (dist / radius_km).min(1.0);
+                    let falloff = (1.0 - normalized * normalized).max(0.0);
+
+                    let missing = city.original_population - city.population;
+                    let restored = (missing as f64 * falloff * 0.4) as u64;
+                    city.set_population(city.population + restored);
+
+                    // Undo casualties proportionally
+                    self.casualties = self.casualties.saturating_sub(restored);
                 }
             }
         }
