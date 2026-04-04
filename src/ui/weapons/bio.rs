@@ -70,7 +70,8 @@ pub fn render(exp: &ExplosionRender, x: u16, y: u16, area: Rect, global_frame: u
                     if g.pixel_to_sphere_point(bx, by).is_none() { continue; }
                 }
 
-                let radial_dist = dist_sq.sqrt() / (cap_width * height_factor).max(1.0);
+                let eff_w_sq = (cap_width * height_factor).max(1.0);
+                let radial_dist = (dist_sq / (eff_w_sq * eff_w_sq)).sqrt();
                 let dist_norm = (radial_dist * 0.6 + height_ratio * 0.4).min(1.0);
 
                 let seed = hash3(px as u64, py as u64, global_frame + exp.frame as u64);

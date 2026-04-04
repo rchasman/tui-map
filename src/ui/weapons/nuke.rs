@@ -80,7 +80,7 @@ pub fn render(exp: &ExplosionRender, x: u16, y: u16, area: Rect, global_frame: u
                     if g.pixel_to_sphere_point(bx, by).is_none() { continue; }
                 }
 
-                let radial_dist = dist_sq.sqrt() / (cap_width * height_factor);
+                let radial_dist = (dist_sq / effective_width_sq).sqrt();
                 let vertical_factor = (-dy as f32) / cap_height as f32;
                 let dist_norm = (radial_dist * 0.5 + vertical_factor * 0.5).min(1.0);
 
