@@ -93,6 +93,15 @@ impl BrailleCanvas {
         &self.pixels[start..start + self.width]
     }
 
+    /// Merge another canvas into this one via bitwise OR.
+    /// Used to combine per-thread render results into a single layer.
+    #[allow(dead_code)] // used conditionally by parallel render path
+    pub fn merge_or(&mut self, other: &Self) {
+        for (a, b) in self.pixels.iter_mut().zip(other.pixels.iter()) {
+            *a |= *b;
+        }
+    }
+
     /// Number of character rows.
     #[inline(always)]
     pub fn char_height(&self) -> usize {
