@@ -402,9 +402,22 @@ fn bench_fire_grid(c: &mut Criterion) {
     let mut grid = FireGrid::new(0.25);
     grid.rebuild(&fires);
 
-    group.bench_function("fires_in_region_30k", |b| {
+    // fires_in_region_into with reused buffer (new path)
+    group.bench_function("fires_in_region_into_30k_reused", |b| {
+        let mut buf = Vec::new();
         b.iter(|| {
-            black_box(grid.fires_in_region(-90.0, 35.0, -70.0, 45.0));
+            buf.clear();
+            grid.fires_in_region_into(-90.0, 35.0, -70.0, 45.0, &mut buf);
+            black_box(&buf);
+        });
+    });
+
+    // fires_in_region_into without reused buffer (equivalent to old path)
+    group.bench_function("fires_in_region_into_30k_fresh", |b| {
+        b.iter(|| {
+            let mut buf = Vec::new();
+            grid.fires_in_region_into(-90.0, 35.0, -70.0, 45.0, &mut buf);
+            black_box(&buf);
         });
     });
 
@@ -838,6 +851,38 @@ fn bench_globe_outline(c: &mut Criterion) {
     group.finish();
 }
 
+// ---------------------------------------------------------------------------
+// 15. fast_acos_approx vs f64::acos — per-pixel globe trig elimination
+// ---------------------------------------------------------------------------
+fn bench_acos_approx(c: &mut Criterion) {
+    use tui_map::ui::weapons::fast_acos_approx;
+
+    let mut group = c.benchmark_group("acos");
+
+    // Dot products spanning [-1, 1] (typical for globe pixel loops)
+    let dots: Vec<f64> = (0..10_000)
+        .map(|i| -1.0 + i as f64 * 0.0002)
+        .collect();
+
+    group.bench_function("std_acos_10k", |b| {
+        b.iter(|| {
+            for &d in &dots {
+                black_box(d.acos());
+            }
+        });
+    });
+
+    group.bench_function("fast_approx_10k", |b| {
+        b.iter(|| {
+            for &d in &dots {
+                black_box(fast_acos_approx(d));
+            }
+        });
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_set_pixel,
@@ -854,5 +899,6 @@ criterion_group!(
     bench_fire_map_clear,
     bench_gas_density_buf,
     bench_globe_outline,
+    bench_acos_approx,
 );
 criterion_main!(benches);
