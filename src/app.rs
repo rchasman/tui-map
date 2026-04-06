@@ -18,7 +18,7 @@ impl WeaponType {
         match self {
             WeaponType::Emp => 30,
             WeaponType::Water => 45,
-            WeaponType::Life => 50,
+            WeaponType::Life => 90,
             _ => 60,
         }
     }
