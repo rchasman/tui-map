@@ -94,7 +94,7 @@ pub fn render_merged(clouds: &[GasCloudRender], density_buf: &mut [(f32, f32)], 
                     if effective_r < 0.0001 { continue; }
                     (fast_acos_approx(dot) / effective_r) as f32
                 } else {
-                    let dist = ((dx * dx + dy * dy) as f32).sqrt();
+                    let dist = { let (dxf, dyf) = (dx as f32, dy as f32); (dxf * dxf + dyf * dyf).sqrt() };
                     let effective_r = r as f32 * lobe_mult;
                     if effective_r < 1.0 { continue; }
                     dist / effective_r

@@ -46,7 +46,6 @@ pub fn render(exp: &ExplosionRender, x: u16, y: u16, area: Rect, global_frame: u
     for dy in dy_lo..=dy_hi {
         let py = (y as i16 + dy) as u16;
 
-        let dy_sq = dy * dy;
         let is_drip_zone = dy > sphere_r;
 
         for dx in dx_lo..=dx_hi {
@@ -64,7 +63,8 @@ pub fn render(exp: &ExplosionRender, x: u16, y: u16, area: Rect, global_frame: u
                     }
                 }
             } else {
-                ((dx * dx + dy_sq) as f32).sqrt()
+                let (dxf, dyf) = (dx as f32, dy as f32);
+                (dxf * dxf + dyf * dyf).sqrt()
             };
 
             // Dense sphere check (less turbulence = more solid fill)

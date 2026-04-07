@@ -33,13 +33,12 @@ pub fn render(exp: &ExplosionRender, x: u16, y: u16, area: Rect, global_frame: u
 
     for dy in dy_min..=dy_max {
         let py = (y as i16 + dy) as u16;
-        let dy_sq = dy * dy;
         let dy_f32 = dy as f32;
         let height_ratio = dy_f32.abs() / cap_height_f32;
 
         for dx in dx_lo..=dx_hi {
-            let dist_sq = (dx * dx + dy_sq) as f32;
             let dx_f32 = dx as f32;
+            let dist_sq = dx_f32 * dx_f32 + dy_f32 * dy_f32;
 
             let large_turb_seed = hash2((fast_pseudo_angle(dx_f32, dy_f32) * 600.0) as u64, global_frame / 3);
             let large_turbulence = ((large_turb_seed & 0xFF) as f32 / 255.0 - 0.5) * 0.5;

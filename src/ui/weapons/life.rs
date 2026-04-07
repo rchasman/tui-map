@@ -51,13 +51,12 @@ pub fn render(exp: &ExplosionRender, x: u16, y: u16, area: Rect, global_frame: u
 
     for dy in dy_min..=dy_max {
         let py = (y as i16 + dy) as u16;
-        let dy_sq = dy * dy;
         let dy_f32 = dy as f32;
         let height_ratio = -dy_f32 / pillar_h_f32; // 0 at center, 1 at top
 
         for dx in dx_lo..=dx_hi {
-            let dist_sq = (dx * dx + dy_sq) as f32;
             let dx_f32 = dx as f32;
+            let dist_sq = dx_f32 * dx_f32 + dy_f32 * dy_f32;
 
             // Slow organic turbulence — vines shift glacially
             let angle = fast_pseudo_angle(dx_f32, dy_f32);

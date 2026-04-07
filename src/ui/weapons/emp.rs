@@ -52,7 +52,7 @@ pub fn render(exp: &ExplosionRender, x: u16, y: u16, area: Rect, global_frame: u
                     }
                 }
             } else {
-                ((dx * dx + dy * dy) as f32).sqrt()
+                { let (dxf, dyf) = (dx as f32, dy as f32); (dxf * dxf + dyf * dyf).sqrt() }
             };
 
             // Check if this pixel is near any ring
