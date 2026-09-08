@@ -11,6 +11,9 @@ pub enum WeaponType {
     Water,
     Life,
     Chem,
+    Tornado,
+    Frost,
+    Meteor,
 }
 
 impl WeaponType {
@@ -20,6 +23,9 @@ impl WeaponType {
             WeaponType::Water => 180,
             WeaponType::Life => 210,
             WeaponType::Nuke => 90,
+            WeaponType::Tornado => 210,
+            WeaponType::Frost => 180,
+            WeaponType::Meteor => 100,
             _ => 60,
         }
     }
@@ -27,7 +33,9 @@ impl WeaponType {
     /// Arrival timing stays independent of the visible settling tail.
     pub fn front_frames(self) -> u8 {
         match self {
-            WeaponType::Water => 45,
+            WeaponType::Water | WeaponType::Frost => 45,
+            WeaponType::Tornado => 40,
+            WeaponType::Meteor => 30,
             WeaponType::Life => 90,
             _ => self.max_frames(),
         }
@@ -41,6 +49,9 @@ impl WeaponType {
             WeaponType::Water => "≋",
             WeaponType::Life => "❀",
             WeaponType::Chem => "☠",
+            WeaponType::Tornado => "@",
+            WeaponType::Frost => "❄",
+            WeaponType::Meteor => "☄",
         }
     }
 
@@ -52,12 +63,15 @@ impl WeaponType {
             WeaponType::Water => "WATER",
             WeaponType::Life => "LIFE",
             WeaponType::Chem => "CHEM",
+            WeaponType::Tornado => "TORNADO",
+            WeaponType::Frost => "FROST",
+            WeaponType::Meteor => "METEOR",
         }
     }
 
     /// Whether this weapon is restorative (heals rather than destroys)
     pub fn is_restorative(self) -> bool {
-        matches!(self, WeaponType::Water | WeaponType::Life)
+        matches!(self, WeaponType::Water | WeaponType::Life | WeaponType::Frost)
     }
 }
 
@@ -416,8 +430,14 @@ impl App {
             match weapon {
                 WeaponType::Water => self.apply_water_effect(lon, lat, radius_km),
                 WeaponType::Life => self.apply_life_effect(lon, lat, radius_km),
+                WeaponType::Frost => {},
                 _ => unreachable!(),
             }
+            return;
+        }
+
+        // Wind redistributes existing hazards without creating fire or fallout.
+        if weapon == WeaponType::Tornado {
             return;
         }
 
@@ -490,8 +510,8 @@ impl App {
 
         // Create fallout zone (weapon-dependent)
         match weapon {
-            WeaponType::Emp => {
-                // EMP produces no fallout
+            WeaponType::Emp | WeaponType::Meteor => {
+                // Electrical pulses and impacts produce no radioactive fallout
             }
             _ => {
                 let (fallout_radius_mult, fallout_intensity) = match weapon {
@@ -699,6 +719,8 @@ impl App {
             zone.intensity > 0
         });
 
+        self.interactions.advect_clouds(&mut self.gas_clouds);
+
         // Update gas clouds - expand radius asymptotically, decay intensity
         self.gas_clouds.retain_mut(|cloud| {
             let gap = cloud.max_radius_km - cloud.current_radius_km;
@@ -877,3 +899,36 @@ fn fast_distance_km(lon1: f64, lat1: f64, lon2: f64, lat2: f64) -> f64 {
     R * (dx * dx + dy * dy).sqrt()
 }
 
+#[cfg(test)]
+mod weather_tests {
+    use super::*;
+
+    #[test]
+    fn weather_launches_do_not_inherit_nuclear_side_effects() {
+        for weapon in [WeaponType::Tornado, WeaponType::Frost, WeaponType::Meteor] {
+            let mut app = App::new(100, 50);
+            app.frame = 30;
+            app.select_weapon(weapon);
+            app.launch_nuke(50, 24);
+            assert_eq!(app.explosions.len(), 1);
+            assert_eq!(app.interactions.fields.len(), 1);
+            assert!(app.fallout.is_empty());
+            assert!(app.gas_clouds.is_empty());
+            if weapon == WeaponType::Meteor {
+                assert!(!app.fires.is_empty());
+                assert!(app.fires.iter().all(|f| f.weapon_type == WeaponType::Meteor));
+                let mut cooling = app.explosions[0].clone();
+                cooling.weapon_type = WeaponType::Frost;
+                cooling.frame = 45;
+                app.interactions.launch(&cooling);
+                app.update_explosions();
+                assert!(app.fires.is_empty());
+                assert!(app.fire_grid.cells.iter().all(|&v| v == 0));
+                assert!(app.fire_grid_fine.cells.iter().all(|&v| v == 0));
+            } else {
+                assert!(app.fires.is_empty());
+                assert_eq!(app.casualties, 0);
+            }
+        }
+    }
+}

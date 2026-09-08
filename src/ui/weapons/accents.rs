@@ -71,6 +71,7 @@ pub(super) fn render(
     globe: Option<&GlobeViewport>,
     particles: bool,
 ) {
+    if matches!(exp.weapon_type, WeaponType::Tornado | WeaponType::Frost | WeaponType::Meteor) { return; }
     let t = exp.frame as f32 / exp.weapon_type.max_frames() as f32;
     if t >= 1.0 || exp.radius == 0 {
         return;
@@ -84,6 +85,9 @@ pub(super) fn render(
         WeaponType::Life => (190, 255, 110),
         WeaponType::Bio => (105, 255, 155),
         WeaponType::Chem => (245, 140, 255),
+        WeaponType::Tornado => (175, 200, 220),
+        WeaponType::Frost => (160, 235, 255),
+        WeaponType::Meteor => (255, 135, 55),
     };
     let mut ink = Ink {
         area: area.intersection(buf.area),
@@ -144,6 +148,7 @@ pub(super) fn render(
             }
             let travel = radius * speed * age;
             let (dx, dy) = match exp.weapon_type {
+                WeaponType::Tornado | WeaponType::Frost | WeaponType::Meteor => unreachable!(),
                 WeaponType::Nuke => (
                     a.cos() * travel * 2.0,
                     -a.sin().abs() * travel * 3.5 + radius * age * age * 1.8,

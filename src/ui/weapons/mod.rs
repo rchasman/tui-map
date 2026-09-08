@@ -11,6 +11,7 @@ mod aerosol;
 pub mod volume;
 pub mod composite;
 mod reactions;
+mod weather;
 
 use crate::app::WeaponType;
 use crate::map::GlobeViewport;
@@ -59,6 +60,9 @@ pub fn weapon_color(weapon: WeaponType) -> Color {
         WeaponType::Water => Color::Rgb(30, 144, 255),
         WeaponType::Life => Color::Rgb(50, 205, 50),
         WeaponType::Chem => Color::Rgb(200, 0, 200),
+        WeaponType::Tornado => Color::Rgb(175, 200, 220),
+        WeaponType::Frost => Color::Rgb(160, 235, 255),
+        WeaponType::Meteor => Color::Rgb(255, 135, 55),
     }
 }
 
@@ -77,6 +81,7 @@ fn render_body(exp: &ExplosionRender, x: u16, y: u16, area: Rect, global_frame: 
         WeaponType::Water => water::render(exp, x, y, area, global_frame, buf, globe),
         WeaponType::Life => life::render(exp, x, y, area, global_frame, buf, globe),
         WeaponType::Chem => chem::render(exp, x, y, area, global_frame, buf, globe),
+        WeaponType::Tornado | WeaponType::Frost | WeaponType::Meteor => weather::render(exp, x, y, area, buf, globe),
     }
 }
 
@@ -107,7 +112,7 @@ mod tests {
     #[test]
     fn liquid_tails_remain_visible_and_all_effects_finish_cleanly() {
         let area = Rect::new(6, 4, 60, 30);
-        for (weapon, late) in [(WeaponType::Water, 120), (WeaponType::Life, 150), (WeaponType::Emp, 18), (WeaponType::Bio, 20), (WeaponType::Chem, 20), (WeaponType::Nuke, 30)] {
+        for (weapon, late) in [(WeaponType::Tornado, 120), (WeaponType::Frost, 120), (WeaponType::Meteor, 70), (WeaponType::Water, 120), (WeaponType::Life, 150), (WeaponType::Emp, 18), (WeaponType::Bio, 20), (WeaponType::Chem, 20), (WeaponType::Nuke, 30)] {
             let mut exp = ExplosionRender { x: 30, y: 20, frame: late, radius: 12,
                 weapon_type: weapon, lon: 10.0, lat: 20.0, radius_km: 500.0 };
             let mut buf = Buffer::empty(Rect::new(0, 0, 80, 40));

@@ -23,7 +23,7 @@ mod tests {
     fn reversing_explosions_preserves_blend_and_viewport_border() {
         let area = Rect::new(5, 3, 50, 24);
         let projection = Projection::Mercator(Viewport::new(0.0, 0.0, 6.0, 100, 96));
-        let mut explosions: Vec<_> = [WeaponType::Nuke, WeaponType::Emp, WeaponType::Life]
+        let mut explosions: Vec<_> = [WeaponType::Nuke, WeaponType::Emp, WeaponType::Life, WeaponType::Tornado, WeaponType::Frost, WeaponType::Meteor]
             .into_iter()
             .map(|weapon_type| ExplosionRender {
                 x: 25,
@@ -281,8 +281,8 @@ impl Compositor {
                 globe,
             );
             }
-            if matches!(exp.weapon_type, WeaponType::Nuke | WeaponType::Chem)
-                && world.fields.iter().any(|f| f.weapon == WeaponType::Water)
+            if matches!(exp.weapon_type, WeaponType::Nuke | WeaponType::Chem | WeaponType::Meteor)
+                && world.fields.iter().any(|f| matches!(f.weapon, WeaponType::Water | WeaponType::Frost))
             {
                 // The thermal body also yields where water has already arrived.
                 for y in area.y..area.bottom() {
@@ -297,7 +297,7 @@ impl Compositor {
                             if world
                                 .fields
                                 .iter()
-                                .any(|f| f.weapon == WeaponType::Water && f.contains(point))
+                                .any(|f| matches!(f.weapon, WeaponType::Water | WeaponType::Frost) && f.contains(point))
                             {
                                 self.scratch[(x, y)].reset();
                             }

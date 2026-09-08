@@ -13,6 +13,7 @@ pub fn is_raised(weapon: WeaponType) -> bool {
     matches!(
         weapon,
         WeaponType::Nuke | WeaponType::Bio | WeaponType::Chem | WeaponType::Life
+            | WeaponType::Tornado | WeaponType::Frost | WeaponType::Meteor
     )
 }
 
@@ -91,6 +92,10 @@ pub fn render(exp: &ExplosionRender, globe: &GlobeViewport, area: Rect, buf: &mu
         area,
     };
     if !globe.volume_may_be_visible(center, volume.scale * 6.5) {
+        return;
+    }
+    if matches!(exp.weapon_type, WeaponType::Tornado | WeaponType::Frost | WeaponType::Meteor) {
+        super::weather::samples(exp, |x, y, z, color| volume.dot(x, y, z, color, 0, buf));
         return;
     }
     let t = exp.frame as f32 / exp.weapon_type.max_frames() as f32;
@@ -289,6 +294,9 @@ mod tests {
             WeaponType::Bio,
             WeaponType::Chem,
             WeaponType::Life,
+            WeaponType::Tornado,
+            WeaponType::Frost,
+            WeaponType::Meteor,
         ] {
             let mut exp = ExplosionRender {
                 x: 0,

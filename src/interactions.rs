@@ -1,6 +1,6 @@
 //! Geographic effect fields and short-lived reaction residue. No viewport state.
 use crate::{
-    app::{Explosion, Fire, WeaponType},
+    app::{Explosion, Fire, GasCloud, WeaponType},
     map::globe::lonlat_to_vec3,
 };
 use glam::DVec3;
@@ -51,6 +51,8 @@ impl Field {
     fn lifetime(&self) -> u16 {
         match self.weapon {
             WeaponType::Water => 360,
+            WeaponType::Frost => 240,
+            WeaponType::Tornado => self.weapon.max_frames() as u16,
             WeaponType::Life => 420,
             _ => self.weapon.max_frames() as u16 + 24,
         }
@@ -112,6 +114,16 @@ impl Interactions {
             r.age < r.lifetime()
         });
         let mut changed = false;
+        // Sum wind from a snapshot before moving anything, so overlapping
+        // vortices cannot depend on launch order. Quenching uses the new position.
+        if self.fields.iter().any(|f| f.weapon == WeaponType::Tornado) {
+            for fire in fires.iter_mut() {
+                let (lon, lat) = self.wind_position(fire.lon, fire.lat);
+                changed |= lon != fire.lon || lat != fire.lat;
+                fire.lon = lon;
+                fire.lat = lat;
+            }
+        }
         let reaches: Vec<_> = self
             .fields
             .iter()
@@ -119,7 +131,7 @@ impl Interactions {
             .map(|f| (f, (f.front_km() / EARTH_KM).cos()))
             .collect();
         if reaches.is_empty() {
-            return false;
+            return changed;
         }
         for fire in fires.iter_mut() {
             let point = lonlat_to_vec3(fire.lon, fire.lat);
@@ -127,7 +139,10 @@ impl Interactions {
             // growth, regardless of field insertion order.
             let wet = reaches
                 .iter()
-                .filter(|(f, reach)| f.weapon == WeaponType::Water && f.center.dot(point) >= *reach)
+                .filter(|(f, reach)| {
+                    matches!(f.weapon, WeaponType::Water | WeaponType::Frost)
+                        && f.center.dot(point) >= *reach
+                })
                 .max_by(|a, b| a.0.radius_km.total_cmp(&b.0.radius_km));
             let life = reaches
                 .iter()
@@ -170,7 +185,10 @@ impl Interactions {
         // footprints bloom, including water that arrived before the life pulse.
         // No water means no wet-growth contacts to sample. Fire reactions above
         // still run, and existing residue has already advanced its age.
-        if !reaches.iter().any(|(f, _)| f.weapon == WeaponType::Water) {
+        if !reaches
+            .iter()
+            .any(|(f, _)| matches!(f.weapon, WeaponType::Water | WeaponType::Frost))
+        {
             return changed;
         }
         for (life, reach) in reaches.iter().filter(|(f, _)| f.weapon == WeaponType::Life) {
@@ -185,7 +203,8 @@ impl Interactions {
                     let point = lonlat_to_vec3(lon, lat);
                     if life.center.dot(point) >= *reach
                         && reaches.iter().any(|(f, reach)| {
-                            f.weapon == WeaponType::Water && f.center.dot(point) >= *reach
+                            matches!(f.weapon, WeaponType::Water | WeaponType::Frost)
+                                && f.center.dot(point) >= *reach
                         })
                     {
                         emit(
@@ -201,6 +220,47 @@ impl Interactions {
             }
         }
         changed
+    }
+
+    /// Transport around the sphere, including the date line and poles.
+    /// Fixed-point vector addition makes overlapping winds order independent.
+    fn wind_position(&self, lon: f64, lat: f64) -> (f64, f64) {
+        let point = lonlat_to_vec3(lon, lat);
+        let mut drift = [0i64; 3];
+        for field in self
+            .fields
+            .iter()
+            .filter(|f| f.weapon == WeaponType::Tornado)
+        {
+            if !field.contains(point) {
+                continue;
+            }
+            let distance = field.distance(point);
+            let weight = (1.0 - distance / field.front_km().max(1.0)).max(0.0);
+            let fade = (1.0 - field.age as f64 / field.lifetime() as f64).min(0.3) / 0.3;
+            let tangent = field.center.cross(point);
+            let velocity = tangent * (0.08 * weight * fade);
+            for (sum, value) in drift.iter_mut().zip(velocity.to_array()) {
+                *sum += (value * 1e12).round() as i64;
+            }
+        }
+        if drift == [0; 3] {
+            return (lon, lat);
+        }
+        let moved = (point + DVec3::from_array(drift.map(|v| v as f64 / 1e12))).normalize();
+        (
+            moved.y.atan2(moved.x).to_degrees(),
+            moved.z.clamp(-1.0, 1.0).asin().to_degrees(),
+        )
+    }
+
+    pub fn advect_clouds(&self, clouds: &mut [GasCloud]) {
+        if !self.fields.iter().any(|f| f.weapon == WeaponType::Tornado) {
+            return;
+        }
+        for cloud in clouds {
+            (cloud.lon, cloud.lat) = self.wind_position(cloud.lon, cloud.lat);
+        }
     }
 
     /// Temporary cloud displacement and ionization at this world point.
@@ -229,6 +289,21 @@ struct CloudField {
 impl CloudField {
     fn new(field: &Field) -> Option<Self> {
         let t = field.progress();
+        if field.weapon == WeaponType::Tornado {
+            if field.age == 0 || field.age >= field.lifetime() {
+                return None;
+            }
+            let front = field.front_km() * 0.5;
+            let width = (field.radius_km * 0.3).max(1.0);
+            return Some(Self {
+                center: field.center,
+                front,
+                width,
+                cutoff: ((front + width * 3.0) / EARTH_KM).cos(),
+                recovery: ((field.lifetime() - field.age) as f64 / 50.0).min(1.0),
+                charged: false,
+            });
+        }
         if t <= 0.0 || t >= 1.4 {
             return None;
         }
@@ -500,5 +575,111 @@ mod tests {
             assert!((field.distance(lonlat_to_vec3(lon, lat)) - field.front_km()).abs() < 0.001);
             assert!((-180.0..180.0).contains(&lon));
         }
+    }
+
+    #[test]
+    fn wind_transports_hazards_across_date_line_and_poles_in_any_order() {
+        for lat in [0.0, 88.0, -88.0] {
+            let mut world = Interactions::default();
+            for lon in [179.0, -179.0] {
+                let mut exp = pulse(WeaponType::Tornado, 50);
+                exp.lon = lon;
+                exp.lat = lat;
+                world.launch(&exp);
+            }
+            let before = (179.9, lat + 0.5);
+            let moved = world.wind_position(before.0, before.1);
+            assert_ne!(moved, before);
+            assert!((-180.0..=180.0).contains(&moved.0));
+            assert!((-90.0..=90.0).contains(&moved.1));
+            world.fields.reverse();
+            assert_eq!(moved, world.wind_position(before.0, before.1));
+            let mut clouds = vec![GasCloud {
+                lon: before.0,
+                lat: before.1,
+                current_radius_km: 30.0,
+                max_radius_km: 90.0,
+                intensity: 1000,
+                weapon_type: WeaponType::Chem,
+            }];
+            world.advect_clouds(&mut clouds);
+            assert_eq!((clouds[0].lon, clouds[0].lat), moved);
+            assert_eq!(clouds[0].intensity, 1000);
+            let mut fires = vec![Fire {
+                lon: before.0,
+                lat: before.1,
+                intensity: 200,
+                weapon_type: WeaponType::Meteor,
+            }];
+            assert!(world.update(&mut fires));
+            assert_ne!((fires[0].lon, fires[0].lat), before);
+            assert_eq!(fires[0].intensity, 200);
+            assert_eq!(world.wind_position(0.0, 0.0), (0.0, 0.0));
+            for _ in 0..250 {
+                world.update(&mut Vec::new());
+            }
+            assert!(!world.active());
+            assert_eq!(world.wind_position(before.0, before.1), before);
+        }
+    }
+
+    #[test]
+    fn frost_quenches_windblown_meteor_fire_and_blooms_in_any_order() {
+        let mut world = Interactions::default();
+        for weapon in [WeaponType::Tornado, WeaponType::Frost, WeaponType::Life] {
+            world.launch(&pulse(weapon, 30));
+        }
+        let mut reversed = Interactions::default();
+        reversed.fields = world.fields.iter().rev().cloned().collect();
+        let mut fires = vec![fire(-179.0, 230)];
+        fires[0].weapon_type = WeaponType::Meteor;
+        let mut other = fires.clone();
+        world.update(&mut fires);
+        reversed.update(&mut other);
+        assert!(fires.is_empty() && other.is_empty());
+        assert_eq!(
+            world.reactions.keys().collect::<Vec<_>>(),
+            reversed.reactions.keys().collect::<Vec<_>>()
+        );
+        assert!(world
+            .reactions
+            .values()
+            .any(|r| r.kind == ReactionKind::Steam));
+        assert!(world
+            .reactions
+            .values()
+            .any(|r| r.kind == ReactionKind::Bloom));
+        fires.push(fire(-179.0, 200));
+        world.update(&mut fires);
+        assert!(fires.is_empty(), "residual frost prevents reignition");
+        for _ in 0..700 {
+            world.update(&mut fires);
+        }
+        assert!(!world.active());
+        fires.push(fire(-179.0, 200));
+        world.update(&mut fires);
+        assert_eq!(fires.len(), 1, "expired frost no longer quenches");
+    }
+
+    #[test]
+    fn tornado_hollows_centered_gas_until_the_wind_expires() {
+        let mut world = Interactions::default();
+        world.launch(&pulse(WeaponType::Tornado, 150));
+        let center = world.fields[0].center;
+        let (lon, lat) = destination(179.0, 0.0, world.fields[0].front_km() * 0.5, 1.0);
+        let rim = lonlat_to_vec3(lon, lat);
+        assert!(world.cloud_response(center).0 < 0.4);
+        assert!(world.cloud_response(rim).0 > 2.5);
+        for point in [center, rim] {
+            assert_eq!(
+                world.prepare_cloud_response()(point),
+                world.cloud_response(point)
+            );
+        }
+        for _ in 0..70 {
+            world.update(&mut Vec::new());
+        }
+        assert_eq!(world.cloud_response(center), (1.0, 0.0));
+        assert_eq!(world.cloud_response(rim), (1.0, 0.0));
     }
 }

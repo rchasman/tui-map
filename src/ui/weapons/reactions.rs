@@ -74,6 +74,9 @@ pub(super) fn wave(field: &Field, projection: &Projection, area: Rect, buf: &mut
         WeaponType::Life => (190, 255, 110),
         WeaponType::Bio => (105, 255, 155),
         WeaponType::Chem => (245, 140, 255),
+        WeaponType::Tornado => (175, 200, 220),
+        WeaponType::Frost => (160, 235, 255),
+        WeaponType::Meteor => (255, 135, 55),
     };
     let rings = if matches!(field.weapon, WeaponType::Water | WeaponType::Emp) {
         3
