@@ -10,5 +10,11 @@
     "build:web": "wasm-pack build --target web --out-dir web/pkg --release && node web/build.mjs",
     "dev:web": "node web/serve.mjs",
     "test:web": "node --test web/smoke.test.mjs web/feeds.test.mjs"
+  },
+  "devDependencies": {
+    "wasm-pack": "0.15.0"
+  },
+  "engines": {
+    "node": ">=24"
   }
 }
