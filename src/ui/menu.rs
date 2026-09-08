@@ -15,6 +15,9 @@ const GROUPS: &[&[(&str, &str)]] = &[
         ("4", "4 Bio"),
         ("5", "5 EMP"),
         ("6", "6 Chem"),
+        ("o", "o Tornado"),
+        ("f", "f Frost"),
+        ("m", "m Meteor"),
     ],
     &[
         ("g", "g Globe/map"),
@@ -89,6 +92,9 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect, paused: bool, help: bool
             "4" => app.active_weapon.label() == "BIO",
             "5" => app.active_weapon.label() == "EMP",
             "6" => app.active_weapon.label() == "CHEM",
+            "o" => app.active_weapon.label() == "TORNADO",
+            "f" => app.active_weapon.label() == "FROST",
+            "m" => app.active_weapon.label() == "METEOR",
             "b" => settings.show_borders,
             "s" => settings.show_states,
             "y" => settings.show_counties,
@@ -126,7 +132,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect, paused: bool, help: bool
     if help {
         let size = frame.area();
         let width = size.width.min(64);
-        let height = size.height.min(19);
+        let height = size.height.min(22);
         let area = Rect::new(
             (size.width - width) / 2,
             (size.height - height) / 2,
@@ -134,7 +140,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect, paused: bool, help: bool
             height,
         );
         frame.render_widget(Clear, area);
-        frame.render_widget(Paragraph::new("Drag / swipe: rotate or pan\nClick / tap / Space: release effect\nScroll / +/-: zoom\n1-6: select effect\n7/8/9/t: quakes / hazards / aircraft / satellites\ni: inspect markers (click without effects)\nArrows / hjkl: pan\ng: globe / flat map\nEsc: pause / resume   r: reset\n\nWater + fire = steam\nEMP + gas = electric filaments\nWater + life = blooms\n\nClick or press ? / Esc to close")
+        frame.render_widget(Paragraph::new("Drag / swipe: rotate or pan\nClick / tap / Space: release effect\nScroll / +/-: zoom\n1-6: select effect; o/f/m: tornado/frost/meteor\n7/8/9/t: quakes / hazards / aircraft / satellites\ni: inspect markers (click without effects)\nArrows / hjkl: pan\ng: globe / flat map\nEsc: pause / resume   r: reset\n\nWater + fire = steam\nEMP + gas = electric filaments\nWater / frost + life = blooms\nTornado: swirls fire and gas\nFrost: quenches fire; Meteor: ignites land\n\nClick or press ? / Esc to close")
             .wrap(Wrap { trim: true }).block(Block::default().borders(Borders::ALL).title(" Help "))
             .style(Style::default().fg(Color::Cyan).bg(Color::Black)), area);
     }
@@ -147,7 +153,7 @@ mod tests {
     fn all_controls_fit_and_hit_their_own_cells() {
         for width in [40, 55, 120, 240] {
             let (height, items) = layout(width);
-            assert_eq!(items.len(), 23);
+            assert_eq!(items.len(), 26);
             for item in items {
                 assert!(item.area.right() < width);
                 assert!(item.area.bottom() < height);

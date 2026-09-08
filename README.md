@@ -8,7 +8,7 @@ Play at **https://tui-map.vercel.app** (personal Vercel workspace).
 
 The browser runs the shared Rust simulation as WebAssembly in a Web Worker.
 A canvas paints the Ratatui cell buffer at up to 30 FPS. Drag to rotate or pan,
-scroll or use the zoom buttons, and click to release any of the six effects.
+scroll or use the zoom buttons, and click to release any of the nine effects.
 Water is selected on startup and after reset.
 The full-screen terminal includes clickable Ratatui controls for effects, layers,
 projection switching, pause, reset, and help (`?`). Controls wrap to fit narrow
@@ -66,6 +66,7 @@ cargo run --release
 - `-` - Zoom out
 - `r`/`0` - Reset view
 - `q`/`Esc` - Quit
+- `o` / `f` / `m` - Select Tornado / Frost / Meteor (terminal and browser)
 
 ## Live data layers
 
@@ -114,7 +115,7 @@ or bundled datasets are copied. Third-party data retains its own terms.
 Effects blend light independently of drawing order and react in geographic space,
 so contact stays anchored while panning, zooming, or switching projections.
 
-On the globe, Nuke, Bio, Chem, and Life occupy volumes above the surface.
+On the globe, Nuke, Bio, Chem, Life, Tornado, Frost, and Meteor occupy volumes above the surface.
 Their height rotates with Earth: raised tops can remain visible beyond the horizon
 while the planet hides their bases. Particle trails use the same depth test.
 
@@ -124,6 +125,17 @@ while the planet hides their bases. Particle trails use the same depth test.
 - **Bio:** low drifting wisps spread through continuous, porous plumes.
 - **Chem:** heavier, irregular plumes leave attached rivulets and turbulent pockets.
 - **Nuke:** impact-specific billows rise at uneven heights and lean with the plume.
+- **Tornado (`o`):** a rotating funnel lifts spiraling ribbons above a debris skirt.
+  Its winds carry existing fires and Bio/Chem clouds around the center, including
+  across the date line. A sustained hollow core compresses gas into a bright rim.
+  Overlapping winds add independently of launch order.
+  Wind creates no new fire or fallout; water and frost still quench transported fire.
+- **Frost (`f`):** branching ice crystals spread across the surface. The advancing
+  cold front quenches fire into steam and leaves a brief cooling field, including
+  against new meteor fires. Frost + Life produces blooms like Water + Life.
+- **Meteor (`m`):** an immediate impact ejects fiery ballistic trails above a
+  cooling crater. It damages cities and ignites land without radioactive fallout.
+  Water and frost suppress its fire and thermal glow.
 - **Water + fire:** the advancing wave extinguishes heat and leaves drifting steam
   and dying embers. Moisture briefly prevents reignition.
 - **EMP + gas:** cyan filaments illuminate density contours, then discharge.

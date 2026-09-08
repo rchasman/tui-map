@@ -14,8 +14,8 @@ test('WASM host renders, fires all effects, changes projection, and resets', () 
     app.load_layer('coastline', 0, new TextEncoder().encode(JSON.stringify(geometry)));
     app.finish_loading();
     assert.equal(app.render().length, 120 * 40 * 3);
-    for (const [i, weapon] of ['WATER', 'LIFE', 'NUKE', 'BIO', 'EMP', 'CHEM'].entries()) {
-      app.command(String(i + 1));
+    for (const [key, weapon] of [['1', 'WATER'], ['2', 'LIFE'], ['3', 'NUKE'], ['4', 'BIO'], ['5', 'EMP'], ['6', 'CHEM'], ['o', 'TORNADO'], ['f', 'FROST'], ['m', 'METEOR']]) {
+      app.command(key);
       for (let frame = 0; frame < 16; frame++) app.tick();
       const before = JSON.parse(app.status()).effects;
       app.pointer('fire', 60, 19);
@@ -66,6 +66,10 @@ test('TUI menu clicks select effects without firing and control pause and help',
     assert.equal(JSON.parse(app.status()).weapon, 'LIFE');
     click('[4 Bio]');
     assert.equal(JSON.parse(app.status()).weapon, 'BIO');
+    for (const [label, weapon] of [['o Tornado', 'TORNADO'], ['f Frost', 'FROST'], ['m Meteor', 'METEOR']]) {
+      click(`[${label}]`);
+      assert.equal(JSON.parse(app.status()).weapon, weapon);
+    }
     assert.equal(JSON.parse(app.status()).effects, 0);
     click('[Esc Pause]');
     const frame = JSON.parse(app.status()).frame;
