@@ -77,8 +77,9 @@ pub fn render(exp: &ExplosionRender, x: u16, y: u16, area: Rect, global_frame: u
 
             // Also add flickering arc sparks between rings
             let spark_seed = hash3(dx as u64, dy as u64, global_frame / 3 + exp.frame as u64 / 3);
-            let branch = (angle*9.0 + phase + (dist*0.8+phase).sin()*0.7).sin().abs();
-            let is_spark = branch < 0.10 && dist < max_r * 1.05 && dist > ring_radii[2] * 0.5 && arc > 0.0;
+            let branch_noise = super::organic::noise(dist*0.22, angle*2.0+phase, exp.lon.to_bits()) - 0.5;
+            let branch = (angle*9.0 + phase + (dist*0.8+phase).sin()*0.7+branch_noise*1.8).sin().abs();
+            let is_spark = branch < 0.10 && dist < max_r * 1.05 && dist > ring_radii[2] * 0.5 && arc > -0.1 && (exp.frame as f32*0.6+angle*2.0+phase).sin() > -0.65;
 
             if let Some((proximity, ring_idx)) = best_ring {
                 let ring_fade = proximity / ring_thickness; // 0 at center, 1 at edge

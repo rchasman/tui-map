@@ -1,26 +1,12 @@
 //! A buoyant fireball rolls into a mushroom cap, then cools into billowing smoke.
 use super::ExplosionRender;
-use crate::{hash::hash3, map::GlobeViewport};
+use crate::{hash::rand_simple, map::GlobeViewport};
+use super::organic::noise;
 use ratatui::{buffer::Buffer, layout::Rect, style::Color};
 
 fn smooth(start: f32, end: f32, value: f32) -> f32 {
     let t = ((value - start) / (end - start)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
-}
-
-/// Interpolated material noise. Coordinates advect with the plume; the seed
-/// belongs to the impact, so camera movement and global time cannot reshuffle it.
-fn noise(x: f32, y: f32, seed: u64) -> f32 {
-    let ix = x.floor() as i64;
-    let iy = y.floor() as i64;
-    let tx = smooth(0.0, 1.0, x - x.floor());
-    let ty = smooth(0.0, 1.0, y - y.floor());
-    let value = |dx: i64, dy: i64| {
-        (hash3((ix + dx) as u64, (iy + dy) as u64, seed) & 65535) as f32 / 65535.0
-    };
-    let a = value(0, 0) * (1.0 - tx) + value(1, 0) * tx;
-    let b = value(0, 1) * (1.0 - tx) + value(1, 1) * tx;
-    a * (1.0 - ty) + b * ty
 }
 
 #[derive(Clone, Copy)]
@@ -60,13 +46,16 @@ impl Plume {
         let lift = 0.12 + 2.5 * (1.0 - (1.0 - t).powi(2));
         let width = 0.24 + growth * 1.04 + t * 0.22;
         let mushroom = smooth(0.10, 0.38, t);
+        let seed = exp.lon.to_bits() ^ exp.lat.to_bits().rotate_left(21);
+        let wind = (rand_simple(seed) as f32 - 0.5) * 0.35;
         let lobes = std::array::from_fn(|i| {
+            let variation = rand_simple(seed.wrapping_add(i as u64 + 11)) as f32 - 0.5;
             let offset = i as f32 - 2.0;
             let roll = (t * 5.0 + offset * 1.7).sin() * 0.12 * growth;
             Lobe {
-                x: offset * width * 0.36 * mushroom,
-                z: lift + ((0.32 - offset.abs() * 0.05) * growth + roll) * mushroom,
-                rx: width * (0.42 + 0.035 * (t * 4.0 + offset).sin()),
+                x: offset * width * 0.36 * mushroom + wind*t + variation*0.12*growth,
+                z: lift + ((0.32 - offset.abs() * 0.05 + variation*0.2) * growth + roll) * mushroom,
+                rx: width * (0.42 + variation*0.12 + 0.035 * (t * 4.0 + offset).sin()),
                 rz: 0.18 + growth * (0.40 - offset.abs() * 0.035),
             }
         });
@@ -77,7 +66,7 @@ impl Plume {
             growth,
             mushroom,
             lobes,
-            seed: exp.lon.to_bits() ^ exp.lat.to_bits().rotate_left(21),
+            seed,
         }
     }
 
@@ -88,7 +77,8 @@ impl Plume {
             z,
             cap_vertical: ((z - self.lift) / cap_radius).powi(2),
             lobe_vertical: self.lobes.map(|lobe| ((z - lobe.z) / lobe.rz).powi(2)),
-            drift: (z * 4.0 - self.t * 5.0).sin() * 0.06 * self.growth,
+            drift: (z * 4.0 - self.t * 5.0).sin() * 0.06 * self.growth
+                + (rand_simple(self.seed) as f32 - 0.5)*0.18*z*self.t,
             stem_width: 0.11 + self.growth * 0.1 + smooth(0.3, self.lift.max(0.31), z) * 0.08,
             stem_bottom: (z - 0.015) * 5.0,
             stem_top: (self.lift - z) * 5.0,

@@ -31,9 +31,10 @@ pub fn render(exp: &ExplosionRender, x: u16, y: u16, area: Rect, _global_frame: 
                     let edge = spread * (1.0 + 0.07*(angle*3.0+phase).sin() + 0.045*(angle*7.0-phase+age*0.018).sin());
                     let d = (dx*dx + (dy/0.72).powi(2)).sqrt();
                     if d > edge { continue; }
+                    let eddy = super::organic::noise(dx*3.0-age*0.018, dy*4.0+age*0.011, exp.lon.to_bits() ^ exp.lat.to_bits()) - 0.5;
                     let flow = (dx*5.0+dy*3.0-age*0.055+phase).sin()
-                        + (dx*2.7-dy*6.0+age*0.035).sin()*0.5;
-                    let wave = (d*19.0-age*0.22+flow*0.9).sin();
+                        + (dx*2.7-dy*6.0+age*0.035).sin()*0.5 + eddy*1.2;
+                    let wave = (d*19.0-age*0.22+flow*0.9+eddy*2.0).sin();
                     let crest = ((wave-0.55)/0.45).max(0.0).powi(2);
                     let rim = (1.0-(edge-d)/0.08).clamp(0.0,1.0) * (angle*11.0+flow).sin().max(0.0);
                     let caustic = ((flow.abs()-0.5)*0.8).max(0.0);

@@ -72,8 +72,11 @@ Effects blend light independently of drawing order and react in geographic space
 so contact stays anchored while panning, zooming, or switching projections.
 
 - **Water:** a quick splash settles into six seconds of flowing ripples and broken foam.
-- **Life:** a seven-second garden holds its canopy before settling into a gentle fade.
-- **EMP:** broken, uneven arcs and branching sparks replace uniform concentric bands.
+- **Life:** uneven shoots branch into leaves and buds, then settle over seven seconds.
+- **EMP:** broken, uneven arcs and intermittent branching sparks replace uniform concentric bands.
+- **Bio:** low drifting wisps spread through continuous, porous plumes.
+- **Chem:** heavier, irregular plumes leave attached rivulets and turbulent pockets.
+- **Nuke:** impact-specific billows rise at uneven heights and lean with the plume.
 - **Water + fire:** the advancing wave extinguishes heat and leaves drifting steam
   and dying embers. Moisture briefly prevents reignition.
 - **EMP + gas:** cyan filaments illuminate density contours, then discharge.
