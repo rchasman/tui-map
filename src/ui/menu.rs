@@ -9,12 +9,12 @@ use ratatui::{
 
 const GROUPS: &[&[(&str, &str)]] = &[
     &[
-        ("1", "1 Nuke"),
-        ("2", "2 Bio"),
-        ("3", "3 EMP"),
-        ("4", "4 Chem"),
-        ("5", "5 Water"),
-        ("6", "6 Life"),
+        ("1", "1 Water"),
+        ("2", "2 Life"),
+        ("3", "3 Nuke"),
+        ("4", "4 Bio"),
+        ("5", "5 EMP"),
+        ("6", "6 Chem"),
     ],
     &[
         ("g", "g Globe/map"),
@@ -82,12 +82,12 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect, paused: bool, help: bool
     let settings = &app.map_renderer.settings;
     for item in layout(area.width).1 {
         let selected = match item.key {
-            "1" => app.active_weapon.label() == "NUKE",
-            "2" => app.active_weapon.label() == "BIO",
-            "3" => app.active_weapon.label() == "EMP",
-            "4" => app.active_weapon.label() == "CHEM",
-            "5" => app.active_weapon.label() == "WATER",
-            "6" => app.active_weapon.label() == "LIFE",
+            "1" => app.active_weapon.label() == "WATER",
+            "2" => app.active_weapon.label() == "LIFE",
+            "3" => app.active_weapon.label() == "NUKE",
+            "4" => app.active_weapon.label() == "BIO",
+            "5" => app.active_weapon.label() == "EMP",
+            "6" => app.active_weapon.label() == "CHEM",
             "b" => settings.show_borders,
             "s" => settings.show_states,
             "y" => settings.show_counties,

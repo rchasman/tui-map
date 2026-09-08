@@ -13,7 +13,7 @@ test('WASM host renders, fires all effects, changes projection, and resets', () 
     app.load_layer('coastline', 0, new TextEncoder().encode(JSON.stringify(geometry)));
     app.finish_loading();
     assert.equal(app.render().length, 120 * 40 * 3);
-    for (const [i, weapon] of ['NUKE', 'BIO', 'EMP', 'CHEM', 'WATER', 'LIFE'].entries()) {
+    for (const [i, weapon] of ['WATER', 'LIFE', 'NUKE', 'BIO', 'EMP', 'CHEM'].entries()) {
       app.command(String(i + 1));
       for (let frame = 0; frame < 16; frame++) app.tick();
       const before = JSON.parse(app.status()).effects;
@@ -58,7 +58,11 @@ test('TUI menu clicks select effects without firing and control pause and help',
     app.pointer('fire', col, row);
   };
   try {
-    click('[2 Bio]');
+    click('[1 Water]');
+    assert.equal(JSON.parse(app.status()).weapon, 'WATER');
+    click('[2 Life]');
+    assert.equal(JSON.parse(app.status()).weapon, 'LIFE');
+    click('[4 Bio]');
     assert.equal(JSON.parse(app.status()).weapon, 'BIO');
     assert.equal(JSON.parse(app.status()).effects, 0);
     click('[Esc Pause]');
