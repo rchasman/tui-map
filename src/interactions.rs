@@ -112,19 +112,15 @@ impl Interactions {
             r.age < r.lifetime()
         });
         let mut changed = false;
-        let restorative: Vec<_> = self
+        let reaches: Vec<_> = self
             .fields
             .iter()
             .filter(|f| f.weapon.is_restorative())
+            .map(|f| (f, (f.front_km() / EARTH_KM).cos()))
             .collect();
-        if restorative.is_empty() {
+        if reaches.is_empty() {
             return false;
         }
-
-        let reaches: Vec<_> = restorative
-            .iter()
-            .map(|f| (*f, (f.front_km() / EARTH_KM).cos()))
-            .collect();
         for fire in fires.iter_mut() {
             let point = lonlat_to_vec3(fire.lon, fire.lat);
             // Choose reactions from a snapshot: water always takes precedence over
@@ -172,7 +168,12 @@ impl Interactions {
 
         // Sample the grown area in geographic space. Only overlapping wet/growth
         // footprints bloom, including water that arrived before the life pulse.
-        for life in restorative.iter().filter(|f| f.weapon == WeaponType::Life) {
+        // No water means no wet-growth contacts to sample. Fire reactions above
+        // still run, and existing residue has already advanced its age.
+        if !reaches.iter().any(|(f, _)| f.weapon == WeaponType::Water) {
+            return changed;
+        }
+        for (life, reach) in reaches.iter().filter(|(f, _)| f.weapon == WeaponType::Life) {
             for ring in 1..=6 {
                 for spoke in 0..24 {
                     let (lon, lat) = destination(
@@ -182,10 +183,10 @@ impl Interactions {
                         spoke as f64 * std::f64::consts::TAU / 24.0,
                     );
                     let point = lonlat_to_vec3(lon, lat);
-                    if life.contains(point)
-                        && restorative
-                            .iter()
-                            .any(|f| f.weapon == WeaponType::Water && f.contains(point))
+                    if life.center.dot(point) >= *reach
+                        && reaches.iter().any(|(f, reach)| {
+                            f.weapon == WeaponType::Water && f.center.dot(point) >= *reach
+                        })
                     {
                         emit(
                             &mut self.reactions,
@@ -370,6 +371,27 @@ mod tests {
             .reactions
             .values()
             .any(|r| r.kind == ReactionKind::Bloom));
+    }
+
+    #[test]
+    fn dry_growth_still_processes_fire_and_expires_residue() {
+        let mut world = Interactions::default();
+        world.launch(&pulse(WeaponType::Life, 30));
+        let mut fires = vec![fire(179.0, 240)];
+        assert!(world.update(&mut fires));
+        assert_eq!(fires[0].intensity, 238);
+        assert!(world
+            .reactions
+            .values()
+            .all(|r| r.kind == ReactionKind::Scorch));
+        fires.clear();
+        assert!(!world.update(&mut fires));
+        assert!(world.reactions.values().all(|r| r.age == 1));
+        for _ in 0..60 {
+            world.update(&mut fires);
+        }
+        assert!(world.reactions.is_empty());
+        assert!(!world.fields.is_empty());
     }
 
     #[test]
