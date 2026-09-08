@@ -92,6 +92,8 @@ pub(super) fn render(
         origin: (x as f32 + 0.5, y as f32 + 0.5),
     };
     if !particles {
+        let t = exp.frame as f32 / exp.weapon_type.front_frames() as f32;
+        if t >= 1.0 { return; }
         // A fast leading front followed by delayed echoes, drawn below the body.
         let rings = if matches!(exp.weapon_type, WeaponType::Water | WeaponType::Emp) {
             3
@@ -108,6 +110,12 @@ pub(super) fn render(
             for i in 0..samples {
                 let a = TAU * i as f32 / samples as f32;
                 let warp = match exp.weapon_type {
+                    WeaponType::Emp => {
+                        let phase = (exp.lon + exp.lat) as f32;
+                        if (a*5.0+phase+t*3.0).sin() < -0.2 { continue; }
+                        1.0 + 0.08*(a*7.0+phase).sin() + 0.035*(a*17.0).sin()
+                    },
+                    WeaponType::Water => 1.0 + 0.035*(a*5.0+t*4.0).sin(),
                     WeaponType::Life => 1.0 + 0.09 * (a * 6.0 + t * 5.0).sin(),
                     WeaponType::Bio | WeaponType::Chem => 1.0 + 0.06 * (a * 5.0 - t * 8.0).sin(),
                     _ => 1.0,

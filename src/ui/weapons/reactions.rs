@@ -90,7 +90,14 @@ pub(super) fn wave(field: &Field, projection: &Projection, area: Rect, buf: &mut
         let radius = field.radius_km * 1.9 * (1.0 - (1.0 - age).powi(3));
         for sample in 0..samples {
             let bearing = TAU * sample as f64 / samples as f64;
-            let (lon, lat) = destination(field.lon, field.lat, radius, bearing);
+            let phase = field.lon + field.lat;
+            let warp = if field.weapon == WeaponType::Emp {
+                if (bearing*5.0+phase+t*3.0).sin() < -0.2 { continue; }
+                1.0 + 0.08*(bearing*7.0+phase).sin() + 0.035*(bearing*17.0).sin()
+            } else if field.weapon == WeaponType::Water {
+                1.0 + 0.035*(bearing*5.0+t*4.0).sin()
+            } else { 1.0 };
+            let (lon, lat) = destination(field.lon, field.lat, radius*warp, bearing);
             dot(
                 lon,
                 lat,

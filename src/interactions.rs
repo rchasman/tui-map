@@ -33,7 +33,7 @@ impl Field {
     }
 
     pub fn progress(&self) -> f64 {
-        self.age as f64 / self.weapon.max_frames() as f64
+        self.age as f64 / self.weapon.front_frames() as f64
     }
 
     pub fn front_km(&self) -> f64 {
@@ -50,8 +50,8 @@ impl Field {
 
     fn lifetime(&self) -> u16 {
         match self.weapon {
-            WeaponType::Water => 150,
-            WeaponType::Life => 180,
+            WeaponType::Water => 360,
+            WeaponType::Life => 420,
             _ => self.weapon.max_frames() as u16 + 24,
         }
     }
@@ -77,8 +77,8 @@ pub struct Reaction {
 impl Reaction {
     pub fn lifetime(&self) -> u16 {
         match self.kind {
-            ReactionKind::Steam => 90,
-            ReactionKind::Bloom => 110,
+            ReactionKind::Steam => 140,
+            ReactionKind::Bloom => 180,
             ReactionKind::Scorch => 50,
         }
     }
@@ -480,7 +480,7 @@ mod tests {
         assert_eq!(response, world.cloud_response(point));
         world.update(&mut vec![fire(179.0, 240)]);
         assert!(!world.reactions.is_empty());
-        for _ in 0..400 {
+        for _ in 0..700 {
             world.update(&mut Vec::new());
         }
         assert!(!world.active());

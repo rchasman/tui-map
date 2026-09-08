@@ -6,6 +6,8 @@ use ratatui::{buffer::Buffer, layout::Rect, style::Color};
 
 /// EMP: expanding concentric rings — electric blue/cyan, fast, short duration
 pub fn render(exp: &ExplosionRender, x: u16, y: u16, area: Rect, global_frame: u64, buf: &mut Buffer, globe: Option<&GlobeViewport>) {
+    if exp.radius == 0 || exp.frame >= exp.weapon_type.max_frames() { return; }
+    let phase = crate::hash::rand_simple(exp.lon.to_bits() ^ exp.lat.to_bits()) as f32 * std::f32::consts::TAU;
     // 3 rings expanding at staggered speeds, fills radius by frame 15
     let progress = (exp.frame as f32 / 15.0).min(1.0); // Full expansion by frame 15
     let fade = if exp.frame > 15 { (exp.frame - 15) as f32 / 15.0 } else { 0.0 };
@@ -18,7 +20,7 @@ pub fn render(exp: &ExplosionRender, x: u16, y: u16, area: Rect, global_frame: u
         max_r * 0.65,           // Middle ring
         max_r * 0.35,           // Inner ring
     ];
-    let ring_thickness = 2.0_f32; // ~2 chars thick
+    let ring_thickness = 0.85_f32; // ~2 chars thick
 
     // Globe: geographic → screen distance mapping (angular distance × scale factor)
     let center_vec = lonlat_to_vec3(exp.lon, exp.lat);
@@ -29,9 +31,9 @@ pub fn render(exp: &ExplosionRender, x: u16, y: u16, area: Rect, global_frame: u
 
     // Scan area covers full circle, clamped to viewport
     let scan_r = (max_r as i16) + 3;
-    let dy_lo = (-scan_r).max(-(y as i16));
+    let dy_lo = (-scan_r).max(area.y as i16-y as i16);
     let dy_hi = scan_r.min((area.y + area.height - 1) as i16 - y as i16);
-    let dx_lo = (-scan_r).max(-(x as i16));
+    let dx_lo = (-scan_r).max(area.x as i16-x as i16);
     let dx_hi = scan_r.min((area.x + area.width - 1) as i16 - x as i16);
 
     for dy in dy_lo..=dy_hi {
@@ -55,11 +57,17 @@ pub fn render(exp: &ExplosionRender, x: u16, y: u16, area: Rect, global_frame: u
                 { let (dxf, dyf) = (dx as f32, dy as f32); (dxf * dxf + dyf * dyf).sqrt() }
             };
 
+            let angle = (dy as f32 * 2.0).atan2(dx as f32);
+            let arc = (angle*5.0+phase+exp.frame as f32*0.09).sin()
+                + 0.55*(angle*11.0-phase-exp.frame as f32*0.04).sin();
+            let warp = 1.0 + 0.09*(angle*7.0+phase).sin() + 0.045*(angle*17.0-phase).sin();
+            // Each arc has its own radius, gaps and intensity, instead of solid bands.
             // Check if this pixel is near any ring
             let mut best_ring: Option<(f32, usize)> = None; // (proximity to ring, ring_index)
             for (i, &ring_r) in ring_radii.iter().enumerate() {
                 if ring_r < 1.0 { continue; }
-                let proximity = (dist - ring_r).abs();
+                let proximity = (dist - ring_r * warp).abs();
+                if (arc + i as f32 * 0.22) < -0.25 { continue; }
                 if proximity <= ring_thickness {
                     if best_ring.is_none() || proximity < best_ring.unwrap().0 {
                         best_ring = Some((proximity, i));
@@ -68,8 +76,9 @@ pub fn render(exp: &ExplosionRender, x: u16, y: u16, area: Rect, global_frame: u
             }
 
             // Also add flickering arc sparks between rings
-            let spark_seed = hash3(dx as u64, dy as u64, global_frame + exp.frame as u64);
-            let is_spark = (spark_seed & 0x1F) == 0 && dist < max_r && dist > ring_radii[2] * 0.5;
+            let spark_seed = hash3(dx as u64, dy as u64, global_frame / 3 + exp.frame as u64 / 3);
+            let branch = (angle*9.0 + phase + (dist*0.8+phase).sin()*0.7).sin().abs();
+            let is_spark = branch < 0.10 && dist < max_r * 1.05 && dist > ring_radii[2] * 0.5 && arc > 0.0;
 
             if let Some((proximity, ring_idx)) = best_ring {
                 let ring_fade = proximity / ring_thickness; // 0 at center, 1 at edge
@@ -77,7 +86,7 @@ pub fn render(exp: &ExplosionRender, x: u16, y: u16, area: Rect, global_frame: u
 
                 // Rapid pulse/flicker (frame-by-frame jitter)
                 let jitter = ((spark_seed & 0x3) as f32) / 3.0;
-                let brightness = ((1.0 - ring_fade) * age_fade * (0.7 + jitter * 0.3)).min(1.0);
+                let brightness = ((1.0 - ring_fade) * age_fade * (0.35 + arc.max(0.0)*0.4 + jitter * 0.2)).min(1.0);
 
                 if brightness < 0.05 { continue; }
 
@@ -85,22 +94,22 @@ pub fn render(exp: &ExplosionRender, x: u16, y: u16, area: Rect, global_frame: u
                 let (r, g, b, ch) = match ring_idx {
                     0 => { // Outer ring — deep blue fading
                         let b_val = (200.0 * brightness) as u8;
-                        (0, (80.0 * brightness) as u8, b_val, if brightness > 0.5 { '▓' } else { '░' })
+                        (0, (80.0 * brightness) as u8, b_val, if brightness > 0.5 { '⠶' } else { '⠂' })
                     }
                     1 => { // Middle ring — electric cyan
                         ((50.0 * brightness) as u8, (200.0 * brightness) as u8, (255.0 * brightness) as u8,
-                         if brightness > 0.6 { '█' } else { '▒' })
+                         if brightness > 0.6 { '⣤' } else { '⠒' })
                     }
                     _ => { // Inner ring — blinding white-cyan
                         let w = (brightness * 255.0) as u8;
-                        (w, w, (255.0 * brightness) as u8, '█')
+                        (w, w, (255.0 * brightness) as u8, '⠿')
                     }
                 };
 
                 buf[(px, py)].set_char(ch).set_fg(Color::Rgb(r, g, b));
             } else if is_spark && fade < 0.5 {
                 // Arc sparks between rings
-                buf[(px, py)].set_char('·').set_fg(Color::Rgb(0, 255, 255));
+                buf[(px, py)].set_char(if branch < 0.045 { 'ϟ' } else { '·' }).set_fg(Color::Rgb(0, 255, 255));
             }
         }
     }

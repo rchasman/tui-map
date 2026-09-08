@@ -17,9 +17,19 @@ impl WeaponType {
     pub fn max_frames(self) -> u8 {
         match self {
             WeaponType::Emp => 30,
-            WeaponType::Water => 45,
-            WeaponType::Nuke | WeaponType::Life => 90,
+            WeaponType::Water => 180,
+            WeaponType::Life => 210,
+            WeaponType::Nuke => 90,
             _ => 60,
+        }
+    }
+
+    /// Arrival timing stays independent of the visible settling tail.
+    pub fn front_frames(self) -> u8 {
+        match self {
+            WeaponType::Water => 45,
+            WeaponType::Life => 90,
+            _ => self.max_frames(),
         }
     }
 

@@ -102,6 +102,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn liquid_tails_remain_visible_and_all_effects_finish_cleanly() {
+        let area = Rect::new(6, 4, 60, 30);
+        for (weapon, late) in [(WeaponType::Water, 120), (WeaponType::Life, 150), (WeaponType::Emp, 18)] {
+            let mut exp = ExplosionRender { x: 30, y: 20, frame: late, radius: 12,
+                weapon_type: weapon, lon: 10.0, lat: 20.0, radius_km: 500.0 };
+            let mut buf = Buffer::empty(Rect::new(0, 0, 80, 40));
+            render_body(&exp, 30, 20, area, 150, &mut buf, None);
+            assert!(buf.content.iter().any(|c| c.symbol() != " "));
+            for y in 0..40 { for x in 0..80 {
+                if !area.contains((x, y).into()) { assert_eq!(buf[(x,y)].symbol(), " "); }
+            }}
+            exp.frame = weapon.max_frames();
+            let mut ended = Buffer::empty(area);
+            render_body(&exp, 30, 20, area, 210, &mut ended, None);
+            assert!(ended.content.iter().all(|c| c.symbol() == " "));
+        }
+    }
+
+    #[test]
     fn fast_pseudo_angle_range() {
         for &(dx, dy) in &[
             (1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (-1.0, 1.0),

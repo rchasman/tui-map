@@ -9,6 +9,7 @@ Play at **https://tui-map.vercel.app** (personal Vercel workspace).
 The browser runs the shared Rust simulation as WebAssembly in a Web Worker.
 A canvas paints the Ratatui cell buffer at up to 30 FPS. Drag to rotate or pan,
 scroll or use the zoom buttons, and click to release any of the six effects.
+Water is selected on startup and after reset.
 The full-screen terminal includes clickable Ratatui controls for effects, layers,
 projection switching, pause, reset, and help (`?`). Controls wrap to fit narrow
 screens; the browser only hosts the canvas and forwards input.
@@ -70,6 +71,9 @@ cargo run --release
 Effects blend light independently of drawing order and react in geographic space,
 so contact stays anchored while panning, zooming, or switching projections.
 
+- **Water:** a quick splash settles into six seconds of flowing ripples and broken foam.
+- **Life:** a seven-second garden holds its canopy before settling into a gentle fade.
+- **EMP:** broken, uneven arcs and branching sparks replace uniform concentric bands.
 - **Water + fire:** the advancing wave extinguishes heat and leaves drifting steam
   and dying embers. Moisture briefly prevents reignition.
 - **EMP + gas:** cyan filaments illuminate density contours, then discharge.

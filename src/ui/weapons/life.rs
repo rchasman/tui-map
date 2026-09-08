@@ -1,4 +1,4 @@
-use crate::hash::{hash2, hash3};
+use crate::hash::hash3;
 use crate::map::GlobeViewport;
 use super::{ExplosionRender, fast_pseudo_angle};
 use ratatui::{buffer::Buffer, layout::Rect, style::Color};
@@ -14,8 +14,13 @@ fn smoothstep(t: f32) -> f32 {
 /// where it touches land flowers bloom, vines crawl outward, leaves unfurl.
 /// Warm gold core → emerald canopy → trailing tendrils of ivy and petals.
 pub fn render(exp: &ExplosionRender, x: u16, y: u16, area: Rect, global_frame: u64, buf: &mut Buffer, globe: Option<&GlobeViewport>) {
+    if exp.frame >= exp.weapon_type.max_frames() || exp.radius == 0 { return; }
+    // Keep the arrival brisk, sustain the garden, then let it settle gradually.
+    let frame = if exp.frame < 38 { exp.frame as f32 }
+        else if exp.frame < 168 { 38.0 + (exp.frame as f32 - 38.0) * 34.0 / 130.0 }
+        else { 72.0 + (exp.frame as f32 - 168.0) * 18.0 / 42.0 };
     // Slow, graceful expansion — smooth cubic ease-out
-    let t = exp.frame as f32 / 90.0; // normalized to full duration
+    let t = frame / 90.0; // normalized to full duration
     let progress = if t < 0.2 {
         smoothstep(t / 0.2) // Gentle arrival
     } else if t < 0.6 {
@@ -30,18 +35,17 @@ pub fn render(exp: &ExplosionRender, x: u16, y: u16, area: Rect, global_frame: u
     let canopy_width = max_r * 1.4;
 
     // Phase boundaries — stretched for languid pacing
-    let descend_phase = exp.frame < 16;  // Golden light descends slowly
-    let bloom_phase = exp.frame < 38;    // Flowers + vines unfurl gradually
-    let flourish_phase = exp.frame < 72; // Long, peaceful full canopy
+    let descend_phase = frame < 16.0;  // Golden light descends slowly
+    let bloom_phase = frame < 38.0;    // Flowers + vines unfurl gradually
+    let flourish_phase = frame < 72.0; // Long, peaceful full canopy
     // frame >= 72: very slow fade, leaves settle gently
 
     let radius_i16 = (exp.radius as f32 * 1.5) as i16;
     let pillar_h_f32 = pillar_height.max(1) as f32;
-    let frame_seed = global_frame + exp.frame as u64;
 
-    let dy_min = (-pillar_height).max(-(y as i16));
+    let dy_min = (-pillar_height).max(area.y as i16 - y as i16);
     let dy_max = (pillar_height / 5).max(3).min((area.y + area.height - 1) as i16 - y as i16);
-    let dx_lo = (-radius_i16).max(-(x as i16));
+    let dx_lo = (-radius_i16).max(area.x as i16 - x as i16);
     let dx_hi = radius_i16.min((area.x + area.width - 1) as i16 - x as i16);
 
     // Very slow breathing — deep, meditative rhythm
@@ -60,9 +64,9 @@ pub fn render(exp: &ExplosionRender, x: u16, y: u16, area: Rect, global_frame: u
 
             // Slow organic turbulence — vines shift glacially
             let angle = fast_pseudo_angle(dx_f32, dy_f32);
-            let vine_seed = hash2((angle * 500.0) as u64, global_frame / 16);
-            let vine_turb = ((vine_seed & 0xFF) as f32 / 255.0 - 0.5) * 0.9;
-            let leaf_seed = hash3(dx as u64, dy as u64, frame_seed / 2);
+            let vine_turb = (angle * 7.0 + global_frame as f32 * 0.018).sin() * 0.3
+                + (angle * 13.0 - global_frame as f32 * 0.011).cos() * 0.15;
+            let leaf_seed = hash3(dx as u64, dy as u64, 0);
             let leaf_turb = ((leaf_seed & 0xFF) as f32 / 255.0 - 0.5) * 0.6;
 
             // Shape: narrow divine pillar above, wide botanical canopy at ground level
@@ -97,18 +101,18 @@ pub fn render(exp: &ExplosionRender, x: u16, y: u16, area: Rect, global_frame: u
                 if g.pixel_to_sphere_point(bx, by).is_none() { continue; }
             }
 
-            let seed = hash3(px as u64, py as u64, frame_seed / 2);
+            let seed = hash3(px as u64, py as u64, 0);
             let flicker = ((seed & 0xFF) as f32) / 255.0;
 
             // Detail roll changes slowly — stable botanical pattern
-            let detail_seed = hash3(px as u64 ^ 0xF10A, py as u64 ^ 0xBEAD, global_frame / 8);
+            let detail_seed = hash3(px as u64 ^ 0xF10A, py as u64 ^ 0xBEAD, 0);
             let detail_roll = (detail_seed & 0xFF) as f32 / 255.0;
 
             let (r, g, b, ch) = if is_above && height_ratio > 0.15 {
                 // === DIVINE PILLAR (above) ===
                 if descend_phase {
                     // Light descends slowly from above — smoothstep arrival
-                    let arrival = smoothstep(exp.frame as f32 / 16.0);
+                    let arrival = smoothstep(frame / 16.0);
                     let lit = height_ratio < arrival;
                     if !lit { continue; }
                     // Fade in gently based on how recently the light arrived here
@@ -117,7 +121,7 @@ pub fn render(exp: &ExplosionRender, x: u16, y: u16, area: Rect, global_frame: u
                      (200.0 * local_age) as u8,
                      if dist_norm < 0.3 { '█' } else if dist_norm < 0.6 { '▓' } else { '░' })
                 } else if bloom_phase {
-                    let p = smoothstep((exp.frame - 16) as f32 / 22.0);
+                    let p = smoothstep((frame - 16.0) / 22.0);
                     let sparkle = if detail_roll > 0.88 && shimmer > 0.6 { 40.0 } else { 0.0 };
                     if dist_norm < 0.3 {
                         (255u8, (248.0f32 + sparkle * 0.1).min(255.0) as u8,
@@ -129,7 +133,7 @@ pub fn render(exp: &ExplosionRender, x: u16, y: u16, area: Rect, global_frame: u
                     }
                 } else if flourish_phase {
                     // Pillar dims very gradually, sparkles drift
-                    let p = smoothstep((exp.frame - 38) as f32 / 34.0);
+                    let p = smoothstep((frame - 38.0) / 34.0);
                     let fade = (1.0 - p * 0.5).max(0.0);
                     if detail_roll > 0.92 && shimmer > 0.5 {
                         ((250.0 * fade) as u8, (240.0 * fade) as u8, (195.0 * fade) as u8, '✦')
@@ -138,7 +142,7 @@ pub fn render(exp: &ExplosionRender, x: u16, y: u16, area: Rect, global_frame: u
                          (75.0 * fade) as u8, '░')
                     }
                 } else {
-                    let p = smoothstep((exp.frame - 72) as f32 / 18.0);
+                    let p = smoothstep((frame - 72.0) / 18.0);
                     let fade = (1.0 - p).max(0.0);
                     ((115.0 * fade) as u8, (95.0 * fade) as u8, (38.0 * fade) as u8, '░')
                 }
@@ -146,7 +150,7 @@ pub fn render(exp: &ExplosionRender, x: u16, y: u16, area: Rect, global_frame: u
                 // === BOTANICAL CANOPY (ground level) ===
                 if descend_phase {
                     // First touch — golden warmth seeds outward gently
-                    let touch = smoothstep(exp.frame as f32 / 16.0);
+                    let touch = smoothstep(frame / 16.0);
                     let visible = dist_norm < touch * 0.5;
                     if !visible { continue; }
                     let local_bright = smoothstep(1.0 - dist_norm / (touch * 0.5).max(0.01));
@@ -155,7 +159,7 @@ pub fn render(exp: &ExplosionRender, x: u16, y: u16, area: Rect, global_frame: u
                      if dist_norm < 0.1 { '█' } else if dist_norm < 0.25 { '▓' } else { '░' })
                 } else if bloom_phase {
                     // Growth unfurls slowly — smooth expanding front
-                    let p = smoothstep((exp.frame - 16) as f32 / 22.0);
+                    let p = smoothstep((frame - 16.0) / 22.0);
                     let growth_front = p * 1.1;
                     let behind_front = dist_norm < growth_front;
                     if !behind_front && dist_norm > growth_front + 0.12 { continue; }
@@ -205,7 +209,7 @@ pub fn render(exp: &ExplosionRender, x: u16, y: u16, area: Rect, global_frame: u
                     }
                 } else if flourish_phase {
                     // Long, peaceful full garden — very slow sway
-                    let p = smoothstep((exp.frame - 38) as f32 / 34.0);
+                    let p = smoothstep((frame - 38.0) / 34.0);
                     let sway = (global_frame as f32 * 0.04 + dx_f32 * 0.2).sin() * 0.06;
 
                     if dist_norm < 0.1 {
@@ -248,7 +252,7 @@ pub fn render(exp: &ExplosionRender, x: u16, y: u16, area: Rect, global_frame: u
                     }
                 } else {
                     // Very slow fade — leaves settle gently, golden afterglow lingers
-                    let p = smoothstep((exp.frame - 72) as f32 / 18.0);
+                    let p = smoothstep((frame - 72.0) / 18.0);
                     let fade = (1.0 - p).max(0.0);
                     if dist_norm < 0.3 && detail_roll > 0.82 {
                         // Last petals drifting down slowly
