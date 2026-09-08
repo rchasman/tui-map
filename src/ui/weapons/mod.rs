@@ -6,6 +6,8 @@ pub mod life;
 pub mod chem;
 pub mod gas_clouds;
 mod accents;
+mod organic;
+mod aerosol;
 pub mod composite;
 mod reactions;
 
@@ -104,7 +106,7 @@ mod tests {
     #[test]
     fn liquid_tails_remain_visible_and_all_effects_finish_cleanly() {
         let area = Rect::new(6, 4, 60, 30);
-        for (weapon, late) in [(WeaponType::Water, 120), (WeaponType::Life, 150), (WeaponType::Emp, 18)] {
+        for (weapon, late) in [(WeaponType::Water, 120), (WeaponType::Life, 150), (WeaponType::Emp, 18), (WeaponType::Bio, 20), (WeaponType::Chem, 20), (WeaponType::Nuke, 30)] {
             let mut exp = ExplosionRender { x: 30, y: 20, frame: late, radius: 12,
                 weapon_type: weapon, lon: 10.0, lat: 20.0, radius_km: 500.0 };
             let mut buf = Buffer::empty(Rect::new(0, 0, 80, 40));

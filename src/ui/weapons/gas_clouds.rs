@@ -1,6 +1,6 @@
 use super::{fast_pseudo_angle, GasCloudRender};
 use crate::app::WeaponType;
-use crate::hash::{hash2, hash3};
+use super::organic::noise;
 use crate::interactions::Interactions;
 use crate::map::{globe::lonlat_to_vec3, Projection};
 use glam::DVec3;
@@ -15,6 +15,8 @@ struct CloudShape {
     intensity: f64,
     lobes: [f64; 12],
     weapon: WeaponType,
+    time: f32,
+    seed: u64,
 }
 
 impl CloudShape {
@@ -26,15 +28,13 @@ impl CloudShape {
             0.0,
         );
         let radius = (cloud.radius_km / 6371.0).clamp(0.000001, std::f64::consts::PI);
-        let id = hash2(cloud.lon.to_bits(), cloud.lat.to_bits());
+        let id = if cloud.weapon_type == WeaponType::Bio { 0xB105 } else { 0xC4E7 };
         let intensity = (cloud.intensity as f64 / 2000.0).min(1.0);
         let mut lobes = [0.0; 12];
-        let t = (frame % 180) as f64 / 180.0;
-        let smooth = t * t * (3.0 - 2.0 * t);
         for (i, lobe) in lobes.iter_mut().enumerate() {
-            let a = (hash3(id, i as u64, frame / 180) & 255) as f64 / 255.0;
-            let b = (hash3(id, i as u64, frame / 180 + 1) & 255) as f64 / 255.0;
-            *lobe = (0.65 + 0.3 * (a + (b - a) * smooth)) * (0.4 + intensity * 0.6);
+            let material = noise(i as f32*0.8+cloud.lon as f32/30.0,
+                cloud.lat as f32/30.0+frame as f32*0.002, id) as f64;
+            *lobe = (0.58+material*0.42)*(0.4+intensity*0.6);
         }
         Self {
             center,
@@ -45,6 +45,8 @@ impl CloudShape {
             intensity,
             lobes,
             weapon: cloud.weapon_type,
+            time: frame as f32*0.006,
+            seed: id,
         }
     }
 
@@ -66,9 +68,13 @@ impl CloudShape {
         if distance >= 1.0 {
             return 0.0;
         }
-        let texture =
-            0.88 + 0.12 * (east / self.radius * 23.0 + (north / self.radius * 17.0).sin()).sin();
-        (1.0 - distance).powi(2) * self.intensity * texture
+        let u = (east/self.radius) as f32;
+        let v = (north/self.radius) as f32;
+        let curl = noise(u*3.0-self.time, v*3.0, self.seed)-0.5;
+        let texture = noise(u*7.0-self.time, v*7.0+curl*2.0, self.seed ^ 0x37) as f64;
+        let pocket = (texture-0.22).max(0.0)*1.35;
+        (1.0 - distance).powi(2) * self.intensity * (0.30 + pocket)
+
     }
 }
 
