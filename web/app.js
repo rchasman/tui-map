@@ -7,6 +7,7 @@ const worker=new Worker(new URL('./worker.js',import.meta.url),{type:'module'});
 let cols=0,rows=0,cw=8,ch=16,dpr=1,ready=false,inFlight=false;
 let gesture=null,lastPointer=null,pointerMove=null;
 let lastRequest=0;
+let spaceHeld=false;
 let paint=()=>{};
 const updateInspector=createInspector(document.querySelector('#inspector'),()=>{command('Escape');canvas.focus({preventScroll:true});});
 
@@ -52,6 +53,7 @@ worker.onmessage=({data})=>{
 function frame(now){
   if(ready&&!inFlight&&!document.hidden&&now-lastRequest>=1000/30){
     if(pointerMove){send(pointerMove);pointerMove=null;}
+    if(spaceHeld && canvas.dataset.weapon==='WATER' && canvas.dataset.inspect==='false')command(' ');
     inFlight=true;lastRequest=now;send({type:'frame',now});
   }
   requestAnimationFrame(frame);
@@ -90,9 +92,16 @@ document.addEventListener('keydown',event=>{
   if(event.ctrlKey||event.metaKey||event.altKey)return;
   if(event.key!=='Escape' && event.target.closest?.('a,button,input,textarea,select'))return;
   if(['1','2','3','4','5','6','7','8','9','v','e','d','a','t','i','g','b','s','c','y','L','p','h','j','k','l','r','0',' ','+','=','-','ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Escape','?'].includes(event.key)){
-    event.preventDefault();command(event.key);
+    event.preventDefault();
+    if(event.key===' '){
+      spaceHeld=true;
+      if(event.repeat && canvas.dataset.weapon==='WATER')return;
+    }
+    command(event.key);
   }
 });
-document.addEventListener('visibilitychange',()=>send({type:'pause',paused:document.hidden}));
+document.addEventListener('keyup',event=>{if(event.key===' ')spaceHeld=false;});
+window.addEventListener('blur',()=>{spaceHeld=false;});
+document.addEventListener('visibilitychange',()=>{spaceHeld=false;send({type:'pause',paused:document.hidden});});
 new ResizeObserver(resize).observe(stage);
 resize();send({type:'init',cols,rows});requestAnimationFrame(frame);

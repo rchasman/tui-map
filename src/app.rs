@@ -394,9 +394,8 @@ impl App {
 
     /// Launch the active weapon at the given screen position
     pub fn launch_nuke(&mut self, col: u16, row: u16) {
-        const NUKE_COOLDOWN_FRAMES: u64 = 15;
-
-        if self.frame < self.last_nuke_frame + NUKE_COOLDOWN_FRAMES {
+        let cooldown = if self.active_weapon == WeaponType::Water { 3 } else { 15 };
+        if self.frame < self.last_nuke_frame + cooldown {
             return;
         }
 
@@ -412,6 +411,21 @@ impl App {
         self.last_nuke_frame = self.frame;
 
         let weapon = self.active_weapon;
+        // Keep feeding the same nozzle instead of stacking randomly oriented pools.
+        if weapon == WeaponType::Water {
+            if let Some(exp) = self.explosions.iter_mut().rev().find(|exp| {
+                exp.weapon_type == WeaponType::Water && exp.frame < 24
+                    && (exp.lon - lon).abs() < 0.0001 && (exp.lat - lat).abs() < 0.0001
+            }) {
+                exp.frame = 18;
+                if let Some(field) = self.interactions.fields.iter_mut().find(|f| {
+                    f.weapon == WeaponType::Water && f.seed == exp.seed
+                }) {
+                    field.age = field.age.min(35);
+                }
+                return;
+            }
+        }
         let base_radius = 50.0 + 700.0 / self.projection.effective_zoom();
         let radius_km = match weapon {
             WeaponType::Emp => base_radius * 1.5,
@@ -917,6 +931,26 @@ fn fast_distance_km(lon1: f64, lat1: f64, lon2: f64, lat2: f64) -> f64 {
 #[cfg(test)]
 mod weather_tests {
     use super::*;
+
+    #[test]
+    fn held_water_feeds_one_spout_and_drains_after_release() {
+        let mut app = App::new(100, 50);
+        app.select_weapon(WeaponType::Water);
+        app.frame = 30;
+        app.launch_nuke(50, 24);
+        let seed = app.explosions[0].seed;
+        for _ in 0..120 {
+            app.update_explosions();
+            app.launch_nuke(50, 24);
+        }
+        assert_eq!(app.explosions.len(), 1);
+        assert_eq!(app.interactions.fields.len(), 1);
+        assert_eq!(app.explosions[0].seed, seed);
+        assert!(app.explosions[0].frame < 24);
+        for _ in 0..360 { app.update_explosions(); }
+        assert!(app.explosions.is_empty());
+        assert!(app.interactions.fields.is_empty());
+    }
 
     #[test]
     fn meteor_impacts_exactly_once_and_repeated_launches_get_new_variations() {

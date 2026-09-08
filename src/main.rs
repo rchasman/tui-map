@@ -106,8 +106,9 @@ fn run(terminal: &mut DefaultTerminal) -> Result<()> {
         if event::poll(next_frame.saturating_duration_since(Instant::now()))? {
             match event::read()? {
                 Event::Key(key) => {
-                    // Only handle key press events (not release)
-                    if key.kind == KeyEventKind::Press {
+                    // Enhanced terminals report held keys as Repeat events.
+                    if key.kind == KeyEventKind::Press
+                        || (key.kind == KeyEventKind::Repeat && key.code == KeyCode::Char(' ')) {
                         if let KeyCode::Char(c) = key.code {
                             if app.feeds.command(&c.to_string()) {
                                 continue;
