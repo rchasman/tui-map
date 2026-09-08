@@ -270,7 +270,11 @@ impl Compositor {
         super::water_surface::render(&world.fields, projection, area, frame, &mut self.scratch);
         self.collect(area);
         for exp in explosions {
-            if exp.weapon_type == WeaponType::Water { continue; }
+            if exp.weapon_type == WeaponType::Water {
+                super::water::render_spout(exp, area.x + exp.x, area.y + exp.y, area, frame, &mut self.scratch);
+                self.collect(area);
+                continue;
+            }
             if let Some(g) = globe.filter(|_| super::volume::is_raised(exp.weapon_type)) {
                 super::volume::render(exp, g, area, &mut self.scratch);
             } else {

@@ -168,7 +168,7 @@ pub(super) fn render(
                     if let Some(rgb) = surface.color(point, frame as f64) {
                         bits |= [[1, 2, 4, 64], [8, 16, 32, 128]][sx as usize][sy as usize];
                         for i in 0..3 {
-                            color[i] = color[i].max(rgb[i]);
+                            color[i] = color[i].max((rgb[i] as f32 * 0.55) as u8);
                         }
                     }
                 }

@@ -54,3 +54,71 @@ pub fn render(exp: &ExplosionRender, x: u16, y: u16, area: Rect, _global_frame: 
         }
     }
 }
+
+
+/// A raised fountain: a narrow rising core separates into ballistic droplets.
+/// Global time keeps the flow moving when the nozzle is refreshed by held input.
+pub(super) fn render_spout(
+    exp: &ExplosionRender, x: u16, y: u16, area: Rect, global_frame: u64, buf: &mut Buffer,
+) {
+    if exp.radius == 0 || exp.frame >= 60 { return; }
+    let clip = area.intersection(buf.area);
+    let height = (exp.radius as f32 * 0.9).clamp(4.0, 18.0);
+    let width = height * 0.7;
+    let age = exp.frame as f32;
+    for strand in 0..17u64 {
+        let direction = (strand as f32 / 16.0 - 0.5) * 2.0;
+        let speed = 0.85 + rand_simple(exp.seed.wrapping_add(strand * 97)) as f32 * 0.15;
+        for step in 0..100 {
+            let t = step as f32 / 100.0;
+            let travel = t * 36.0;
+            if travel > age + 18.0 || travel < (age - 24.0).max(0.0) { continue; }
+            // Keep the rising column connected; break the falling spray into beads.
+            let pulse = (t * 38.0 - global_frame as f32 * 0.65 + strand as f32 * 1.7).sin();
+            if t > 0.45 && pulse < 0.25 { continue; }
+            let dx = direction * width * t.powi(2)
+                + (t * 15.0 - global_frame as f32 * 0.17).sin() * t * 0.25;
+            let dy = -height * speed * 4.0 * t * (1.0 - t);
+            let dot_x = ((x as f32 + 0.5 + dx) * 2.0).floor() as i32;
+            let dot_y = ((y as f32 + 0.5 + dy) * 4.0).floor() as i32;
+            if dot_x < 0 || dot_y < 0 { continue; }
+            let px = (dot_x / 2) as u16;
+            let py = (dot_y / 4) as u16;
+            if !clip.contains((px, py).into()) { continue; }
+            let bit = [[1,2,4,64],[8,16,32,128]][(dot_x % 2) as usize][(dot_y % 4) as usize];
+            let cell = &mut buf[(px, py)];
+            let old = cell.symbol().chars().next().unwrap_or(' ') as u32;
+            let bits = if (0x2800..=0x28ff).contains(&old) { old - 0x2800 } else { 0 };
+            cell.set_char(char::from_u32(0x2800 + (bits | bit)).unwrap());
+            let bright = direction.abs() < 0.3 || pulse > 0.75;
+            cell.set_fg(if bright { Color::Rgb(165, 235, 255) } else { Color::Rgb(35, 155, 235) });
+        }
+    }
+}
+
+
+#[cfg(test)]
+mod spout_tests {
+    use super::*;
+    use crate::app::WeaponType;
+
+    #[test]
+    fn jet_rises_above_its_anchor_animates_and_stops() {
+        let area = Rect::new(3, 2, 50, 30);
+        let mut exp = ExplosionRender { seed: 7, x: 25, y: 24, frame: 18,
+            radius: 12, weapon_type: WeaponType::Water, lon: 0.0, lat: 0.0, radius_km: 500.0 };
+        let mut a = Buffer::empty(Rect::new(0, 0, 60, 35));
+        render_spout(&exp, 25, 24, area, 30, &mut a);
+        assert!((12..18).any(|y| (20..30).any(|x| a[(x,y)].symbol() != " ")));
+        let mut b = Buffer::empty(a.area);
+        render_spout(&exp, 25, 24, area, 34, &mut b);
+        assert_ne!(a, b);
+        for y in 0..35 { for x in 0..60 {
+            if !area.contains((x,y).into()) { assert_eq!(a[(x,y)].symbol(), " "); }
+        }}
+        exp.frame = 60;
+        let mut ended = Buffer::empty(a.area);
+        render_spout(&exp, 25, 24, area, 90, &mut ended);
+        assert!(ended.content.iter().all(|c| c.symbol() == " "));
+    }
+}
