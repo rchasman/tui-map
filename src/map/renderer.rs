@@ -316,25 +316,49 @@ impl LandGrid {
     /// all-water (0), mixed (1), or all-land (2).
     fn build_coarse(&mut self) {
         let r = Self::COARSE_RATIO;
-        let all_land = r * r;
-        self.coarse = vec![0u8; 360 * 180];
         for coarse_lat in 0..180usize {
             for coarse_lon in 0..360usize {
-                let fine_lat_start = coarse_lat * r;
-                let fine_lon_start = coarse_lon * r;
-                let land_count = (0..r).flat_map(|fl| {
-                    (0..r).map(move |fc| (fl, fc))
-                }).filter(|&(fl, fc)| {
-                    let fine_idx = (fine_lat_start + fl) * Self::WIDTH + (fine_lon_start + fc);
-                    self.get_bit(fine_idx)
-                }).count();
-
-                self.coarse[coarse_lat * 360 + coarse_lon] = match land_count {
-                    0 => 0,              // all water
-                    n if n == all_land => 2, // all land
-                    _ => 1,              // mixed - needs fine check
-                };
+                let mut any_land = false;
+                let mut all_land = true;
+                for row in 0..r {
+                    let start = (coarse_lat * r + row) * Self::WIDTH + coarse_lon * r;
+                    let shift = start % 64;
+                    let first_len = r.min(64 - shift);
+                    let mask = (1u64 << first_len) - 1;
+                    let first = (self.bitmap[start / 64] >> shift) & mask;
+                    any_land |= first != 0;
+                    all_land &= first == mask;
+                    if first_len < r {
+                        let mask = (1u64 << (r - first_len)) - 1;
+                        let second = self.bitmap[start / 64 + 1] & mask;
+                        any_land |= second != 0;
+                        all_land &= second == mask;
+                    }
+                    if any_land && !all_land {
+                        break;
+                    }
+                }
+                self.coarse[coarse_lat * 360 + coarse_lon] =
+                    if all_land { 2 } else { u8::from(any_land) };
             }
+        }
+    }
+
+    /// Set a half-open bit range using masked endpoints and whole-word stores.
+    fn fill_span(bitmap: &mut [u64], start: usize, end: usize) {
+        if start >= end {
+            return;
+        }
+        let first = start / 64;
+        let last = (end - 1) / 64;
+        let first_mask = u64::MAX << (start % 64);
+        let last_mask = u64::MAX >> (63 - (end - 1) % 64);
+        if first == last {
+            bitmap[first] |= first_mask & last_mask;
+        } else {
+            bitmap[first] |= first_mask;
+            bitmap[first + 1..last].fill(u64::MAX);
+            bitmap[last] |= last_mask;
         }
     }
 
@@ -408,27 +432,40 @@ impl LandGrid {
             .map(|chunk| {
                 let mut bitmap = vec![0u64; Self::BITMAP_LEN];
                 let mut crossings = Vec::new();
+                let mut edges = Vec::new();
+                let mut active = Vec::new();
                 for polygon in chunk {
                     let (_, min_lat, _, max_lat) = polygon.bbox;
                     let lat_start = (((min_lat + 90.0) / Self::RESOLUTION).floor() as usize).saturating_sub(1);
                     let lat_end = (((max_lat + 90.0) / Self::RESOLUTION).ceil() as usize + 1).min(Self::HEIGHT);
 
+                    // Sweep edges by their lower endpoint so each row visits only
+                    // crossings, rather than every vertex in the polygon.
+                    edges.clear();
+                    active.clear();
+                    for ring in &polygon.rings {
+                        if ring.len() < 3 { continue; }
+                        for i in 0..ring.len() {
+                            let (x1, y1) = ring[i];
+                            let (x2, y2) = ring[(i + 1) % ring.len()];
+                            if y1 < y2 || y2 < y1 {
+                                edges.push((x1, y1, x2, y2, y1.min(y2), y1.max(y2)));
+                            }
+                        }
+                    }
+                    edges.sort_unstable_by(|a, b| a.4.total_cmp(&b.4));
+                    let mut next_edge = 0;
                     for lat_idx in lat_start..lat_end {
                         let lat = -90.0 + (lat_idx as f64 + 0.5) * Self::RESOLUTION;
-
+                        while next_edge < edges.len() && edges[next_edge].4 <= lat {
+                            active.push(edges[next_edge]);
+                            next_edge += 1;
+                        }
+                        active.retain(|edge| edge.5 > lat);
                         crossings.clear();
-                        for ring in &polygon.rings {
-                            let n = ring.len();
-                            if n < 3 { continue; }
-                            for i in 0..n {
-                                let j = if i + 1 < n { i + 1 } else { 0 };
-                                let (x1, y1) = ring[i];
-                                let (x2, y2) = ring[j];
-                                if (y1 <= lat && y2 > lat) || (y2 <= lat && y1 > lat) {
-                                    let t = (lat - y1) / (y2 - y1);
-                                    crossings.push(x1 + t * (x2 - x1));
-                                }
-                            }
+                        for &(x1, y1, x2, y2, _, _) in &active {
+                            let t = (lat - y1) / (y2 - y1);
+                            crossings.push(x1 + t * (x2 - x1));
                         }
 
                         crossings.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -437,12 +474,7 @@ impl LandGrid {
                             let col_start = ((pair[0] + 180.0) / Self::RESOLUTION).ceil() as usize;
                             let col_end = (((pair[1] + 180.0) / Self::RESOLUTION).floor() as usize + 1).min(Self::WIDTH);
                             let row_base = lat_idx * Self::WIDTH;
-                            for lon_idx in col_start..col_end {
-                                let idx = row_base + lon_idx;
-                                if idx < Self::TOTAL_BITS {
-                                    bitmap[idx / 64] |= 1u64 << (idx % 64);
-                                }
-                            }
+                            Self::fill_span(&mut bitmap, row_base + col_start, row_base + col_end);
                         }
                     }
                 }
@@ -1311,7 +1343,8 @@ where
             }
             c
         })
-        .reduce(|| BrailleCanvas::new(width, height), |mut a, b| { a.merge_or(&b); a })
+        .reduce_with(|mut a, b| { a.merge_or(&b); a })
+        .unwrap_or_else(|| BrailleCanvas::new(width, height))
 }
 
 /// Draw a linestring on a Mercator viewport with wrap-offset culling.
@@ -1451,6 +1484,119 @@ fn draw_linestring_on_globe(canvas: &mut BrailleCanvas, line: &LineString, globe
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parallel_layer_merge_matches_sequential_drawing() {
+        let features: Vec<_> = (0..PAR_THRESHOLD + 17)
+            .map(|i| LineString::new(vec![((i % 360) as f64 - 180.0, 0.0), (0.0, (i % 80) as f64)]))
+            .collect();
+        let candidates: Vec<_> = (0..features.len()).collect();
+        let viewport = Viewport::new(0.0, 20.0, 1.0, 160, 96);
+        let draw = |canvas: &mut BrailleCanvas, line: &LineString| {
+            draw_linestring_mercator(canvas, line, &viewport, &WRAP_OFFSETS);
+        };
+        let actual = render_candidates(&candidates, &features, 80, 24, draw);
+        let mut expected = BrailleCanvas::new(80, 24);
+        for feature in &features {
+            draw(&mut expected, feature);
+        }
+        for row in 0..24 {
+            assert_eq!(actual.row_raw(row), expected.row_raw(row));
+        }
+    }
+
+    #[test]
+    fn bitmap_spans_match_per_bit_reference() {
+        for start in 0..192 {
+            for end in start..=256 {
+                let mut actual = vec![0x5555_5555_5555_5555; 4];
+                let mut expected = actual.clone();
+                for bit in start..end {
+                    expected[bit / 64] |= 1 << (bit % 64);
+                }
+                LandGrid::fill_span(&mut actual, start, end);
+                assert_eq!(actual, expected, "span {start}..{end}");
+            }
+        }
+    }
+
+    #[test]
+    fn coarse_grid_matches_per_pixel_classification() {
+        let mut grid = LandGrid::new();
+        // Include water, solid land, sparse coastlines, and word-crossing spans.
+        for (i, word) in grid.bitmap.iter_mut().enumerate() {
+            *word = match (i / 1000) % 4 {
+                0 => 0,
+                1 => u64::MAX,
+                2 => 1 << (i % 64),
+                _ => (i as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15),
+            };
+        }
+        grid.build_coarse();
+        let r = LandGrid::COARSE_RATIO;
+        for y in 0..180 {
+            for x in 0..360 {
+                let mut count = 0;
+                for dy in 0..r {
+                    for dx in 0..r {
+                        count += usize::from(grid.get_bit((y * r + dy) * LandGrid::WIDTH + x * r + dx));
+                    }
+                }
+                let expected = if count == r * r { 2 } else { u8::from(count != 0) };
+                assert_eq!(grid.coarse[y * 360 + x], expected, "cell {x},{y}");
+            }
+        }
+    }
+
+    #[test]
+    fn sweep_matches_reference_rasterization() {
+        let polygons = vec![
+            Polygon::new(vec![
+                vec![(-7.0, -3.0), (4.0, -2.0), (0.0, 0.0125), (6.0, 5.0), (-7.0, -3.0)],
+                vec![(-1.0, -1.0), (1.0, -1.0), (0.0, -0.1)],
+            ]),
+            Polygon::new(vec![vec![(-2.0, -2.0), (2.0, -2.0), (2.0, 2.0), (-2.0, 2.0)]]),
+            Polygon::new(vec![vec![(-180.0, -90.0), (-179.0, -90.0), (-179.0, -89.0)]]),
+            Polygon::new(vec![vec![(179.0, 89.0), (180.0, 90.0), (179.0, 90.0)]]),
+        ];
+        let actual = LandGrid::build_scanline(&polygons);
+        let mut expected = LandGrid::new();
+        let mut crossings = Vec::new();
+        for polygon in &polygons {
+            for row in 0..LandGrid::HEIGHT {
+                let lat = -90.0 + (row as f64 + 0.5) * LandGrid::RESOLUTION;
+                crossings.clear();
+                for ring in &polygon.rings {
+                    for i in 0..ring.len() {
+                        let (x1, y1) = ring[i];
+                        let (x2, y2) = ring[(i + 1) % ring.len()];
+                        if (y1 <= lat && y2 > lat) || (y2 <= lat && y1 > lat) {
+                            crossings.push(x1 + (lat - y1) / (y2 - y1) * (x2 - x1));
+                        }
+                    }
+                }
+                crossings.sort_unstable_by(f64::total_cmp);
+                for pair in crossings.chunks_exact(2) {
+                    let start = ((pair[0] + 180.0) / LandGrid::RESOLUTION).ceil() as usize;
+                    let end = (((pair[1] + 180.0) / LandGrid::RESOLUTION).floor() as usize + 1).min(LandGrid::WIDTH);
+                    for col in start..end {
+                        let bit = row * LandGrid::WIDTH + col;
+                        expected.bitmap[bit / 64] |= 1 << (bit % 64);
+                    }
+                }
+            }
+        }
+        assert!(actual.bitmap == expected.bitmap, "sweep must preserve the complete raster");
+    }
+
+    #[test]
+    fn scanline_preserves_polygon_holes() {
+        let rectangle = |lo: f64, hi: f64| vec![(lo, lo), (hi, lo), (hi, hi), (lo, hi), (lo, lo)];
+        let grid = LandGrid::build_scanline(&[Polygon::new(vec![rectangle(-5.0, 5.0), rectangle(-1.0, 1.0)])]);
+        assert!(grid.is_land(3.0, 3.0));
+        assert!(!grid.is_land(0.0, 0.0));
+        assert!(!grid.is_land(6.0, 6.0));
+    }
 
     #[test]
     fn city_set_population_updates_cached_label() {
