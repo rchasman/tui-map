@@ -227,7 +227,7 @@ impl App {
             fallout: Vec::new(),
             gas_clouds: Vec::new(),
             casualties: 0,
-            active_weapon: WeaponType::Nuke,
+            active_weapon: WeaponType::Water,
             frame: 0,
             last_nuke_frame: 0,
             spin_velocity: 0.0,

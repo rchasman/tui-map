@@ -8,6 +8,7 @@ await init({ module_or_path: await readFile(new URL('./pkg/tui_map_bg.wasm', imp
 test('WASM host renders, fires all effects, changes projection, and resets', () => {
   const app = new BrowserApp(120, 40);
   try {
+    assert.equal(JSON.parse(app.status()).weapon, 'WATER');
     const geometry = { type: 'FeatureCollection', features: [{ type: 'Feature', properties: {},
       geometry: { type: 'LineString', coordinates: [[-30, 0], [0, 40], [30, 0]] } }] };
     app.load_layer('coastline', 0, new TextEncoder().encode(JSON.stringify(geometry)));
@@ -30,6 +31,7 @@ test('WASM host renders, fires all effects, changes projection, and resets', () 
     assert.equal(app.render().length, 55 * 44 * 3);
     app.command('r');
     const reset = JSON.parse(app.status());
+    assert.equal(reset.weapon, 'WATER');
     assert.equal(reset.effects, 0);
     assert.equal(reset.fires, 0);
     assert.equal(reset.casualties, 0);
