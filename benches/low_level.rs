@@ -110,5 +110,53 @@ fn bench_effects(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_city_grid, bench_effects);
+fn bench_interactions(c: &mut Criterion) {
+    let mut group = c.benchmark_group("effect_interactions");
+    group.sample_size(20);
+    for count in [1, 8, 24] {
+        for water in [false, true] {
+            let mut world = Interactions::default();
+            for i in 0..count {
+                world.launch(&tui_map::app::Explosion {
+                    lon: 179.0 + i as f64 * 0.02,
+                    lat: 0.0,
+                    radius_km: 300.0,
+                    frame: 20,
+                    weapon_type: WeaponType::Life,
+                });
+                if water {
+                    world.launch(&tui_map::app::Explosion {
+                        lon: 179.0 + i as f64 * 0.02,
+                        lat: 0.0,
+                        radius_km: 300.0,
+                        frame: 20,
+                        weapon_type: WeaponType::Water,
+                    });
+                }
+            }
+            let label = if water { "wet_growth" } else { "dry_growth" };
+            group.bench_function(BenchmarkId::new(label, count), |b| {
+                b.iter_batched(
+                    || {
+                        (
+                            Interactions {
+                                fields: world.fields.clone(),
+                                reactions: world.reactions.clone(),
+                            },
+                            Vec::new(),
+                        )
+                    },
+                    |(mut world, mut fires)| {
+                        black_box(world.update(&mut fires));
+                        black_box((&world, &fires));
+                    },
+                    criterion::BatchSize::SmallInput,
+                );
+            });
+        }
+    }
+    group.finish();
+}
+
+criterion_group!(benches, bench_city_grid, bench_effects, bench_interactions);
 criterion_main!(benches);
