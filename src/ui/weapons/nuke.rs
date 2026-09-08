@@ -30,10 +30,17 @@ struct Lobe {
     rx: f32,
     rz: f32,
 }
-impl Lobe {
-    fn density(self, x: f32, z: f32) -> f32 {
-        1.0 - ((x - self.x) / self.rx).powi(2) - ((z - self.z) / self.rz).powi(2)
-    }
+
+// Geometry shared by every horizontal sample at this height.
+struct PlumeRow {
+    z: f32,
+    cap_vertical: f32,
+    lobe_vertical: [f32; 5],
+    drift: f32,
+    stem_width: f32,
+    stem_bottom: f32,
+    stem_top: f32,
+    skirt_vertical: f32,
 }
 
 struct Plume {
@@ -74,32 +81,40 @@ impl Plume {
         }
     }
 
+    fn row(&self, z: f32) -> PlumeRow {
+        let cap_radius =
+            self.width * 0.9 * (1.0 - self.mushroom) + (0.18 + self.growth * 0.30) * self.mushroom;
+        PlumeRow {
+            z,
+            cap_vertical: ((z - self.lift) / cap_radius).powi(2),
+            lobe_vertical: self.lobes.map(|lobe| ((z - lobe.z) / lobe.rz).powi(2)),
+            drift: (z * 4.0 - self.t * 5.0).sin() * 0.06 * self.growth,
+            stem_width: 0.11 + self.growth * 0.1 + smooth(0.3, self.lift.max(0.31), z) * 0.08,
+            stem_bottom: (z - 0.015) * 5.0,
+            stem_top: (self.lift - z) * 5.0,
+            skirt_vertical: ((z - 0.055) / (0.09 + self.growth * 0.07)).powi(2),
+        }
+    }
+
+    #[cfg(test)]
     fn sample(&self, x: f32, z: f32) -> Option<([f32; 3], f32)> {
-        let mut cap = Lobe {
-            x: 0.0,
-            z: self.lift,
-            rx: self.width,
-            rz: self.width * 0.9 * (1.0 - self.mushroom)
-                + (0.18 + self.growth * 0.30) * self.mushroom,
+        self.sample_row(x, &self.row(z))
+    }
+
+    fn sample_row(&self, x: f32, row: &PlumeRow) -> Option<([f32; 3], f32)> {
+        let z = row.z;
+        let mut cap = 1.0 - (x / self.width).powi(2) - row.cap_vertical;
+        for (lobe, vertical) in self.lobes.iter().zip(row.lobe_vertical) {
+            cap = cap.max(1.0 - ((x - lobe.x) / lobe.rx).powi(2) - vertical);
         }
-        .density(x, z);
-        for lobe in self.lobes {
-            cap = cap.max(lobe.density(x, z));
-        }
-        let drift = (z * 4.0 - self.t * 5.0).sin() * 0.06 * self.growth;
-        let stem_width = 0.11 + self.growth * 0.1 + smooth(0.3, self.lift.max(0.31), z) * 0.08;
-        let stem = (1.0 - ((x - drift) / stem_width).powi(2))
-            .min((z - 0.015) * 5.0)
-            .min((self.lift - z) * 5.0);
+        let stem = (1.0 - ((x - row.drift) / row.stem_width).powi(2))
+            .min(row.stem_bottom)
+            .min(row.stem_top);
         let stem = if self.t > 0.08 { stem } else { -10.0 };
-        // A low rolling skirt connects the rising column to the ground flash.
-        let skirt = Lobe {
-            x: 0.0,
-            z: 0.055,
-            rx: 0.22 + self.growth * 0.38,
-            rz: 0.09 + self.growth * 0.07,
-        }
-        .density(x, z)
+        // A low rolling skirt connects the column to the ground flash.
+        let skirt = 1.0
+            - (x / (0.22 + self.growth * 0.38)).powi(2)
+            - row.skirt_vertical
             - (smooth(0.3, 0.65, self.t) * 1.3);
         let shape = cap.max(stem).max(skirt);
         if shape < -0.25 {
@@ -180,6 +195,11 @@ pub fn render(
     let top = ((y as f32 - radius * (plume.lift + 1.05) / 2.0).floor() as i32).max(clip.y as i32);
     let bottom = ((y as f32 + radius * 0.2 + 1.0).ceil() as i32).min(clip.bottom() as i32);
     for py in top..bottom {
+        let rows: [_; 4] = std::array::from_fn(|sy| {
+            // Terminal cells are twice as tall as they are wide.
+            let z = (y as f32 + 0.5 - py as f32 - (sy as f32 + 0.5) / 4.0) * 2.0 / radius;
+            plume.row(z)
+        });
         for px in left..right {
             let mut bits = 0u32;
             let mut sum = [0.0f32; 3];
@@ -195,9 +215,7 @@ pub fn render(
                         continue;
                     }
                     let dx = (px as f32 + (sx as f32 + 0.5) / 2.0 - x as f32 - 0.5) / radius;
-                    // Most terminal cells are twice as tall as they are wide.
-                    let z = (y as f32 + 0.5 - py as f32 - (sy as f32 + 0.5) / 4.0) * 2.0 / radius;
-                    if let Some((rgb, opacity)) = plume.sample(dx, z) {
+                    if let Some((rgb, opacity)) = plume.sample_row(dx, &rows[sy as usize]) {
                         bits |= [[1, 2, 4, 64], [8, 16, 32, 128]][sx as usize][sy as usize];
                         for i in 0..3 {
                             sum[i] += rgb[i];
