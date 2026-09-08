@@ -58,6 +58,36 @@ fn path(
         previous = current;
     }
 }
+
+/// Sample arcs in 3D and depth-test every dot. A visible pair of endpoints
+/// must never create a line through Earth or hide the rest of an orbit when
+/// its satellite is on the far side. None preserves propagation gaps.
+fn orbit_path(
+    frame: &mut Frame,
+    area: Rect,
+    globe: &crate::map::GlobeViewport,
+    points: &[Option<glam::DVec3>],
+    color: Color,
+) {
+    for pair in points.windows(2) {
+        let (Some(a), Some(b)) = (pair[0], pair[1]) else {
+            continue;
+        };
+        let steps = ((a - b).length() * globe.radius * 1.5)
+            .ceil()
+            .clamp(1.0, 256.0) as usize;
+        for step in 0..=steps {
+            let t = step as f64 / steps as f64;
+            let direction = a.normalize().lerp(b.normalize(), t).normalize_or_zero();
+            let p = direction * (a.length() * (1.0 - t) + b.length() * t);
+            if let Some((x, y)) = globe.project_elevated(p) {
+                if globe.elevated_sample_visible(p, x, y) {
+                    point(frame, area, x, y, color);
+                }
+            }
+        }
+    }
+}
 pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
     #[cfg(not(target_arch = "wasm32"))]
     render_active_layers(frame, app, area);
@@ -70,7 +100,14 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
             if layer.kind == Kind::Aircraft && feeds.now - marker.observed > 120. {
                 continue;
             }
-            let Some((x, y)) = app.projection.project_point(marker.lon, marker.lat) else {
+            if let Projection::Globe(globe) = &app.projection {
+                let mut trail = marker.space_trail.clone();
+                if layer.kind == Kind::Aircraft {
+                    trail.push(marker.space_position);
+                }
+                orbit_path(frame, area, globe, &trail, color(layer.kind));
+            }
+            let Some((x, y)) = marker.project(&app.projection) else {
                 continue;
             };
             if x < 0 || y < 0 || x >= i32::from(area.width) * 2 || y >= i32::from(area.height) * 4 {
@@ -91,18 +128,31 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
             if layer.kind == Kind::Aircraft {
                 trail.push((marker.lon, marker.lat));
             }
-            path(frame, area, &app.projection, &trail, tint);
-            point(frame, area, x, y, tint);
+            if (layer.kind != Kind::Satellites && marker.space_position.is_none()
+                && marker.space_trail.iter().all(Option::is_none))
+                || !matches!(app.projection, Projection::Globe(_))
+            {
+                path(frame, area, &app.projection, &trail, tint);
+            }
+            let marker_point = |frame: &mut Frame, x, y| {
+                if let (Projection::Globe(g), Some(p)) = (&app.projection, marker.space_position) {
+                    if !g.elevated_sample_visible(p, x, y) {
+                        return;
+                    }
+                }
+                point(frame, area, x, y, tint);
+            };
+            marker_point(frame, x, y);
             let radius = if layer.kind == Kind::Quakes {
                 marker.magnitude.round().clamp(1., 5.) as i32
             } else {
                 1
             };
             for d in 1..=radius {
-                point(frame, area, x - d, y, tint);
-                point(frame, area, x + d, y, tint);
-                point(frame, area, x, y - d, tint);
-                point(frame, area, x, y + d, tint);
+                marker_point(frame, x - d, y);
+                marker_point(frame, x + d, y);
+                marker_point(frame, x, y - d);
+                marker_point(frame, x, y + d);
             }
             if let Some(heading) = marker.heading {
                 // Project a short geodesic heading segment, including at the poles.
@@ -116,19 +166,28 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
                 let lon2 = lon
                     + (bearing.sin() * distance.sin() * lat.cos())
                         .atan2(distance.cos() - lat.sin() * lat2.sin());
-                path(
-                    frame,
-                    area,
-                    &app.projection,
-                    &[
-                        (marker.lon, marker.lat),
-                        (
-                            (lon2.to_degrees() + 180.).rem_euclid(360.) - 180.,
-                            lat2.to_degrees(),
-                        ),
-                    ],
-                    tint,
-                );
+                if let (Projection::Globe(globe), Some(position)) =
+                    (&app.projection, marker.space_position)
+                {
+                    let target =
+                        crate::map::globe::lonlat_to_vec3(lon2.to_degrees(), lat2.to_degrees())
+                            * position.length();
+                    orbit_path(frame, area, globe, &[Some(position), Some(target)], tint);
+                } else {
+                    path(
+                        frame,
+                        area,
+                        &app.projection,
+                        &[
+                            (marker.lon, marker.lat),
+                            (
+                                (lon2.to_degrees() + 180.).rem_euclid(360.) - 180.,
+                                lat2.to_degrees(),
+                            ),
+                        ],
+                        tint,
+                    );
+                }
             }
         }
     }
@@ -145,7 +204,7 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
                 if layer.kind == Kind::Aircraft && feeds.now - marker.observed > 120. {
                     continue;
                 }
-                if let Some((x, y)) = app.projection.project_point(marker.lon, marker.lat) {
+                if let Some((x, y)) = marker.project(&app.projection) {
                     if x < 0
                         || y < 0
                         || x >= i32::from(area.width) * 2
@@ -320,6 +379,44 @@ pub fn render_info(_frame: &mut Frame, _app: &App, _area: Rect) {
 mod tests {
     use super::*;
     use ratatui::{backend::TestBackend, Terminal};
+    #[test]
+    fn far_side_orbit_arcs_stay_outside_earth_and_gaps_are_not_joined() {
+        use crate::map::{globe::lonlat_to_vec3, GlobeViewport};
+        let globe = GlobeViewport::new(0., 0., 70., 200, 180);
+        let points: Vec<_> = (92..=268)
+            .step_by(4)
+            .map(|lon| Some(lonlat_to_vec3(lon as f64, 0.) * 1.07))
+            .collect();
+        let mut terminal = Terminal::new(TestBackend::new(100, 45)).unwrap();
+        terminal
+            .draw(|frame| orbit_path(frame, frame.area(), &globe, &points, Color::Magenta))
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        assert!(buf.content.iter().any(|c| c.symbol() != " "));
+        // Entire orbit segment is behind Earth; only its shoulders can show.
+        for y in 8..37 {
+            for x in 20..80 {
+                assert_eq!(buf[(x, y)].symbol(), " ");
+            }
+        }
+        terminal
+            .draw(|frame| {
+                orbit_path(
+                    frame,
+                    frame.area(),
+                    &globe,
+                    &[points[0], None, *points.last().unwrap()],
+                    Color::Magenta,
+                )
+            })
+            .unwrap();
+        assert!(terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .all(|c| c.symbol() == " "));
+    }
     #[test]
     fn live_paths_preserve_city_labels() {
         let mut terminal = Terminal::new(TestBackend::new(20, 4)).unwrap();

@@ -98,6 +98,15 @@ side of the current time; positions are **estimates from orbital elements**, not
 live telemetry. Elements older than seven days are rejected. Hazard markers use
 the latest supported event location, not the affected area's extent.
 
+On the globe, satellites and orbit arcs retain their SGP4 altitude and disappear
+behind the solid Earth. Aircraft markers, trails and headings use geometric
+altitude when available, with barometric altitude as an approximate fallback.
+Heights use true scale, so aircraft remain close to the surface when zoomed out.
+Hazards use optional [GeoJSON elevation in metres](https://www.rfc-editor.org/rfc/rfc7946#section-3.1.1);
+missing elevation stays on the surface, and earthquake depth is never treated as
+height. Labels and picking follow the same 3D positions. The flat map continues
+to show ground tracks.
+
 The overlay shows loading, live/estimated, partial, empty, stale, expired and
 offline states plus time since the last successful fetch. Requests time out, retry with backoff,
 and retain the last good snapshot on failure. Aircraft expire after two minutes;
