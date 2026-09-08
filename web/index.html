@@ -12,41 +12,11 @@
   <link rel="stylesheet" href="./style.css">
 </head>
 <body>
-  <header>
-    <a class="brand" href="./" aria-label="TUI Map home"><span class="brand-mark">⠿</span><strong>TUI<span>MAP</span></strong></a>
-    <span class="edition">A WORLD OF REACTIONS</span>
-    <div class="header-actions"><button id="pause" aria-pressed="false" title="Pause animation">Ⅱ <span>Pause</span></button><button id="reset" title="Reset the world (R)">↺ <span>Reset</span></button><button id="help" aria-label="Help and controls">?</button></div>
-  </header>
-  <main>
-    <section id="stage" aria-label="Interactive world map">
-      <canvas id="world" tabindex="0" aria-label="Interactive globe. Drag to rotate, scroll to zoom, click to release the selected effect. Keyboard controls are available in Help."></canvas>
-      <div class="view-controls"><button id="projection" title="Switch globe / flat map (G)">◎ <span>Globe</span></button><span class="divider"></span><button data-command="-" aria-label="Zoom out">−</button><output id="zoom">1.0×</output><button data-command="+" aria-label="Zoom in">+</button></div>
-      <details id="layers"><summary>☷ <span>Layers</span></summary><div class="layer-options">
-        <label><input type="checkbox" data-command="b" checked> Borders</label>
-        <label><input type="checkbox" data-command="s" checked> States</label>
-        <label><input type="checkbox" data-command="y" checked> Counties</label>
-        <label><input type="checkbox" data-command="c" checked> Cities</label>
-        <label><input type="checkbox" data-command="L"> Labels</label>
-        <label><input type="checkbox" data-command="p"> Population</label>
-      </div></details>
-      <div id="loading" role="status"><span class="loader">⠋</span><h1>Assembling your world</h1><p id="loading-message">Loading the globe…</p></div>
-      <div id="error" role="alert" hidden><h1>Something interrupted the map</h1><p></p><button id="retry">Try again</button></div>
-      <div class="map-caption"><span class="live-dot"></span><span id="state-label">EXPLORING</span><span id="coordinates">—</span></div>
-    </section>
-    <section class="toolbox" aria-label="Effects">
-      <div class="toolbox-heading"><span>CHOOSE AN EFFECT</span><span class="interaction-hint">Drag to explore <i>·</i> Click to release <i>·</i> Scroll to zoom</span></div>
-      <div class="effects">
-        <button class="effect" data-weapon="1" data-name="NUKE" aria-pressed="true" style="--effect:#ffaf73"><span class="effect-icon">☢</span><span><strong>Nuke</strong><small>Heat & fallout</small></span><kbd>1</kbd></button>
-        <button class="effect" data-weapon="2" data-name="BIO" aria-pressed="false" style="--effect:#9adf87"><span class="effect-icon">☣</span><span><strong>Bio</strong><small>Drifting spores</small></span><kbd>2</kbd></button>
-        <button class="effect" data-weapon="3" data-name="EMP" aria-pressed="false" style="--effect:#8ad7f0"><span class="effect-icon">ϟ</span><span><strong>EMP</strong><small>Electric pulse</small></span><kbd>3</kbd></button>
-        <button class="effect" data-weapon="4" data-name="CHEM" aria-pressed="false" style="--effect:#dca3ed"><span class="effect-icon">☠</span><span><strong>Chem</strong><small>Reactive clouds</small></span><kbd>4</kbd></button>
-        <button class="effect" data-weapon="5" data-name="WATER" aria-pressed="false" style="--effect:#89bfff"><span class="effect-icon">≋</span><span><strong>Water</strong><small>Cool & cleanse</small></span><kbd>5</kbd></button>
-        <button class="effect" data-weapon="6" data-name="LIFE" aria-pressed="false" style="--effect:#d3df8b"><span class="effect-icon">❀</span><span><strong>Life</strong><small>Restore & bloom</small></span><kbd>6</kbd></button>
-      </div>
-      <div class="bottomline"><span id="effect-hint">Release a fireball, then try water over the flames.</span><span id="data-status" role="status">Loading map</span></div>
-    </section>
+  <main id="stage" aria-label="Terminal map application">
+    <canvas id="world" tabindex="0" aria-label="Interactive terminal globe. Drag to rotate, scroll to zoom, click to release an effect. Click the terminal controls or press 1 to 6 to select effects, G to switch projection, Escape to pause, R to reset, and ? for help."></canvas>
+    <p id="loading" role="status">Loading map…</p>
+    <p id="error" role="alert" hidden></p>
   </main>
-  <dialog id="help-dialog"><button class="close" aria-label="Close help">×</button><p class="eyebrow">FIELD NOTES</p><h2>A world of reactions.</h2><p>Explore the globe and combine effects. Water turns fire into steam. EMP lights up gas. Wet ground and life bloom together.</p><dl><dt>Drag / swipe</dt><dd>Rotate or pan</dd><dt>Click / tap / Space</dt><dd>Release an effect</dd><dt>Scroll / + / −</dt><dd>Zoom</dd><dt>1–6</dt><dd>Select an effect</dd><dt>Arrow keys / H J K L</dt><dd>Pan (lowercase letters)</dd><dt>G</dt><dd>Globe / flat map</dd><dt>R</dt><dd>Reset the world</dd><dt>Escape</dt><dd>Pause / resume</dd></dl><p class="note">Your world is local to this tab. Reloading starts fresh. Geographic data: Natural Earth, public domain.</p></dialog>
   <noscript>This interactive map requires JavaScript and WebAssembly.</noscript>
   <script type="module" src="./app.js"></script>
 </body>

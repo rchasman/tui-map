@@ -44,3 +44,34 @@ test('WASM loader rejects malformed data and unknown layer kinds', () => {
     assert.throws(() => app.load_layer('unknown', 0, new TextEncoder().encode('{"type":"FeatureCollection","features":[]}')));
   } finally { app.free(); }
 });
+
+test('TUI menu clicks select effects without firing and control pause and help', () => {
+  const app = new BrowserApp(55, 44);
+  const click = text => {
+    const cells = app.render();
+    const chars = Array.from(cells).filter((_, i) => i % 3 === 0).map(c => String.fromCodePoint(c)).join('');
+    const index = chars.indexOf(text);
+    assert.ok(index >= 0, `Missing TUI control: ${text}`);
+    const col = index % 55, row = Math.floor(index / 55);
+    app.pointer('start', col, row);
+    app.pointer('end', col, row);
+    app.pointer('fire', col, row);
+  };
+  try {
+    click('[2 Bio]');
+    assert.equal(JSON.parse(app.status()).weapon, 'BIO');
+    assert.equal(JSON.parse(app.status()).effects, 0);
+    click('[Esc Pause]');
+    const frame = JSON.parse(app.status()).frame;
+    app.tick();
+    assert.equal(JSON.parse(app.status()).frame, frame);
+    click('[? Help]');
+    assert.equal(JSON.parse(app.status()).help, true);
+    app.command('Escape');
+    assert.equal(JSON.parse(app.status()).help, false);
+    assert.equal(JSON.parse(app.status()).paused, true);
+    app.command('Escape');
+    app.tick();
+    assert.equal(JSON.parse(app.status()).frame, frame + 1);
+  } finally { app.free(); }
+});

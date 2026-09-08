@@ -9,7 +9,9 @@ Play at **https://tui-map.vercel.app** (personal Vercel workspace).
 The browser runs the shared Rust simulation as WebAssembly in a Web Worker.
 A canvas paints the Ratatui cell buffer at up to 30 FPS. Drag to rotate or pan,
 scroll or use the zoom buttons, and click to release any of the six effects.
-The toolbar provides layers, projection switching, pause, reset, and keyboard help.
+The full-screen terminal includes clickable Ratatui controls for effects, layers,
+projection switching, pause, reset, and help (`?`). Controls wrap to fit narrow
+screens; the browser only hosts the canvas and forwards input.
 
 Requires Node.js 20+, Rust, and wasm-pack:
 

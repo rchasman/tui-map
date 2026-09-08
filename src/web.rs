@@ -18,6 +18,9 @@ pub struct BrowserApp {
     terminal: Terminal<TestBackend>,
     width: u16,
     height: u16,
+    paused: bool,
+    help: bool,
+    map_drag: bool,
 }
 
 #[wasm_bindgen]
@@ -26,7 +29,10 @@ impl BrowserApp {
     pub fn new(width: u16, height: u16) -> Result<BrowserApp, JsValue> {
         console_error_panic_hook::set_once();
         let (width, height) = (width.clamp(40, 240), height.clamp(16, 100));
-        let mut app = App::new(width as usize, height as usize);
+        let mut app = App::new(
+            width as usize,
+            (height - ui::menu::layout(width).0) as usize,
+        );
         app.frame = 30;
         app.map_renderer.settings.show_labels = false;
         let terminal = Terminal::new(TestBackend::new(width, height)).map_err(js_error)?;
@@ -35,6 +41,9 @@ impl BrowserApp {
             terminal,
             width,
             height,
+            paused: false,
+            help: false,
+            map_drag: false,
         })
     }
 
@@ -60,7 +69,10 @@ impl BrowserApp {
         let (width, height) = (width.clamp(40, 240), height.clamp(16, 100));
         self.width = width;
         self.height = height;
-        self.app.resize(width as usize, height as usize);
+        self.app.resize(
+            width as usize,
+            (height - ui::menu::layout(width).0) as usize,
+        );
         self.terminal.backend_mut().resize(width, height);
         self.terminal
             .resize(ratatui::layout::Rect::new(0, 0, width, height))
@@ -68,12 +80,45 @@ impl BrowserApp {
     }
 
     pub fn tick(&mut self) {
-        self.app.update_explosions();
+        if !self.paused {
+            self.app.update_explosions();
+        }
     }
 
     pub fn pointer(&mut self, kind: &str, col: u16, row: u16) {
         let col = col.min(self.width.saturating_sub(1));
         let row = row.min(self.height.saturating_sub(1));
+        let map_height = self.height - ui::menu::layout(self.width).0;
+        if kind == "end" {
+            self.map_drag = false;
+            self.app.end_drag();
+            return;
+        }
+        if self.help {
+            if kind == "fire" {
+                self.help = false;
+            }
+            return;
+        }
+        if row >= map_height {
+            self.app.mouse_pos = None;
+            if kind == "start" {
+                self.map_drag = false;
+                self.app.end_drag();
+            }
+            if kind == "fire" {
+                if let Some(key) = ui::menu::hit(self.width, col, row - map_height) {
+                    self.command(key);
+                }
+            }
+            return;
+        }
+        if kind == "start" {
+            self.map_drag = true;
+        }
+        if kind == "drag" && !self.map_drag {
+            return;
+        }
         self.app.set_mouse_pos(col, row);
         match kind {
             "start" => self.app.start_drag(col, row),
@@ -88,7 +133,15 @@ impl BrowserApp {
     }
 
     pub fn command(&mut self, key: &str) {
+        if self.help {
+            if matches!(key, "?" | "Escape") {
+                self.help = false;
+            }
+            return;
+        }
         match key {
+            "?" => self.help = true,
+            "Escape" => self.paused = !self.paused,
             "1" => self.app.select_weapon(WeaponType::Nuke),
             "2" => self.app.select_weapon(WeaponType::Bio),
             "3" => self.app.select_weapon(WeaponType::Emp),
@@ -126,15 +179,35 @@ impl BrowserApp {
             }
         }
         renderer.invalidate_cache();
-        self.app = App::new(self.width as usize, self.height as usize);
+        self.app = App::new(
+            self.width as usize,
+            (self.height - ui::menu::layout(self.width).0) as usize,
+        );
         self.app.frame = 30;
+        self.paused = false;
+        self.map_drag = false;
         self.app.map_renderer = renderer;
     }
 
     /// Three u32s per cell: Unicode scalar, foreground RGB, background RGB.
     pub fn render(&mut self) -> Result<Vec<u32>, JsValue> {
         self.terminal
-            .draw(|frame| ui::render(frame, &mut self.app))
+            .draw(|frame| {
+                let menu_height = ui::menu::layout(self.width).0;
+                let map_height = self.height - menu_height;
+                ui::render_in(
+                    frame,
+                    &mut self.app,
+                    ratatui::layout::Rect::new(0, 0, self.width, map_height),
+                );
+                ui::menu::render(
+                    frame,
+                    &self.app,
+                    ratatui::layout::Rect::new(0, map_height, self.width, menu_height),
+                    self.paused,
+                    self.help,
+                );
+            })
             .map_err(js_error)?;
         let cells = &self.terminal.backend().buffer().content;
         let mut output = Vec::with_capacity(cells.len() * 3);
@@ -157,7 +230,7 @@ impl BrowserApp {
             "projection":if matches!(self.app.projection,Projection::Globe(_)){"Globe"}else{"Mercator"},
             "zoom":self.app.zoom_level(),"center":self.app.center_coords(),
             "fires":self.app.fires.len(),"effects":self.app.explosions.len(),
-            "casualties":self.app.casualties,"frame":self.app.frame}).to_string()
+            "casualties":self.app.casualties,"frame":self.app.frame, "paused":self.paused, "help":self.help, "mapRows":self.height - ui::menu::layout(self.width).0}).to_string()
     }
 }
 

@@ -1,4 +1,5 @@
 pub mod weapons;
+pub mod menu;
 
 use crate::app::{App, WeaponType};
 use crate::hash::hash3;
@@ -16,8 +17,11 @@ use ratatui::{
 
 /// Render the UI
 pub fn render(frame: &mut Frame, app: &mut App) {
-    let area = frame.area();
+    render_in(frame, app, frame.area());
+}
 
+/// Render into a host-provided terminal region.
+pub fn render_in(frame: &mut Frame, app: &mut App, area: Rect) {
     // Split into map area and status bar
     let chunks = Layout::default()
         .direction(Direction::Vertical)
