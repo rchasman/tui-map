@@ -241,7 +241,7 @@ mod tests {
     use super::*;
     use crate::app::WeaponType;
     fn explosion(frame: u8, radius: u16) -> ExplosionRender {
-        ExplosionRender {
+        ExplosionRender { seed: 0,
             x: 40,
             y: 30,
             frame,

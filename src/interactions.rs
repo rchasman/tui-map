@@ -402,7 +402,7 @@ mod tests {
     use super::*;
 
     fn pulse(weapon: WeaponType, age: u8) -> Explosion {
-        Explosion {
+        Explosion { seed: 0,
             lon: 179.0,
             lat: 0.0,
             radius_km: 300.0,
@@ -563,7 +563,7 @@ mod tests {
 
     #[test]
     fn polar_destination_preserves_geographic_radius() {
-        let field = Field::new(&Explosion {
+        let field = Field::new(&Explosion { seed: 0,
             lon: 179.0,
             lat: 88.0,
             radius_km: 500.0,

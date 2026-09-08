@@ -77,7 +77,7 @@ fn bench_effects(c: &mut Criterion) {
         ));
         for count in [1, 8, 32] {
             let explosions: Vec<_> = (0..count)
-                .map(|i| ExplosionRender {
+                .map(|i| ExplosionRender { seed: 0,
                     x: 10 + (i * 17) as u16 % (width - 20),
                     y: 10 + (i * 7) as u16 % (height - 20),
                     frame: 15,
@@ -117,7 +117,7 @@ fn bench_interactions(c: &mut Criterion) {
         for water in [false, true] {
             let mut world = Interactions::default();
             for i in 0..count {
-                world.launch(&tui_map::app::Explosion {
+                world.launch(&tui_map::app::Explosion { seed: 0,
                     lon: 179.0 + i as f64 * 0.02,
                     lat: 0.0,
                     radius_km: 300.0,
@@ -125,7 +125,7 @@ fn bench_interactions(c: &mut Criterion) {
                     weapon_type: WeaponType::Life,
                 });
                 if water {
-                    world.launch(&tui_map::app::Explosion {
+                    world.launch(&tui_map::app::Explosion { seed: 0,
                         lon: 179.0 + i as f64 * 0.02,
                         lat: 0.0,
                         radius_km: 300.0,
@@ -165,7 +165,7 @@ fn bench_clouds(c: &mut Criterion) {
     for count in [0, 8, 48] {
         let mut world = Interactions::default();
         for i in 0..count {
-            world.launch(&tui_map::app::Explosion {
+            world.launch(&tui_map::app::Explosion { seed: 0,
                 lon: (i % 8) as f64 - 4.0,
                 lat: (i / 8) as f64 - 3.0,
                 frame: 15,
@@ -226,7 +226,7 @@ fn bench_nuke(c: &mut Criterion) {
     let area = Rect::new(0, 0, 100, 50);
     for radius in [8, 24] {
         for frame in [5, 30, 60] {
-            let exp = ExplosionRender {
+            let exp = ExplosionRender { seed: 0,
                 x: 50,
                 y: 40,
                 frame,

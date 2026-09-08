@@ -78,6 +78,7 @@ impl WeaponType {
 /// A nuclear explosion with position and animation frame
 #[derive(Clone)]
 pub struct Explosion {
+    pub seed: u64,
     pub lon: f64,
     pub lat: f64,
     pub frame: u8,
@@ -417,7 +418,7 @@ impl App {
             _ => base_radius,
         };
 
-        let explosion = Explosion {
+        let explosion = Explosion { seed: hash3(lon.to_bits(), lat.to_bits(), self.frame),
             lon,
             lat,
             frame: 0,

@@ -103,7 +103,7 @@ impl Scene {
             _ => None,
         };
         if let Some((weapon_type, lon)) = launch {
-            let explosion = Explosion {
+            let explosion = Explosion { seed: 0,
                 lon,
                 lat: 0.0,
                 frame: 0,
@@ -166,7 +166,7 @@ impl Scene {
                 if x < 0 || y < 0 {
                     return None;
                 }
-                Some(ExplosionRender {
+                Some(ExplosionRender { seed: e.seed,
                     x: (x / 2) as u16,
                     y: (y / 4) as u16,
                     frame: e.frame,

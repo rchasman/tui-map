@@ -270,7 +270,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(100, 55)).unwrap();
         terminal.draw(|frame| ui::render(frame, &mut app)).unwrap();
         let before = terminal.backend().buffer().clone();
-        app.explosions.push(Explosion {
+        app.explosions.push(Explosion { seed: 0,
             lon: 100.0,
             lat: 0.0,
             frame: 90,
@@ -298,7 +298,7 @@ mod tests {
             WeaponType::Frost,
             WeaponType::Meteor,
         ] {
-            let mut exp = ExplosionRender {
+            let mut exp = ExplosionRender { seed: 0,
                 x: 0,
                 y: 0,
                 frame: 30,

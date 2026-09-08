@@ -20,6 +20,7 @@ use ratatui::{buffer::Buffer, layout::Rect, style::Color};
 
 /// Screen-space explosion ready for rendering
 pub struct ExplosionRender {
+    pub seed: u64,
     pub x: u16,
     pub y: u16,
     pub frame: u8,
@@ -114,7 +115,7 @@ mod tests {
     fn liquid_tails_remain_visible_and_all_effects_finish_cleanly() {
         let area = Rect::new(6, 4, 60, 30);
         for (weapon, late) in [(WeaponType::Tornado, 120), (WeaponType::Frost, 120), (WeaponType::Meteor, 70), (WeaponType::Water, 120), (WeaponType::Life, 150), (WeaponType::Emp, 18), (WeaponType::Bio, 20), (WeaponType::Chem, 20), (WeaponType::Nuke, 30)] {
-            let mut exp = ExplosionRender { x: 30, y: 20, frame: late, radius: 12,
+            let mut exp = ExplosionRender { seed: 0, x: 30, y: 20, frame: late, radius: 12,
                 weapon_type: weapon, lon: 10.0, lat: 20.0, radius_km: 500.0 };
             let mut buf = Buffer::empty(Rect::new(0, 0, 80, 40));
             render_body(&exp, 30, 20, area, 150, &mut buf, None);

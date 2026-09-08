@@ -196,7 +196,7 @@ mod tests {
     };
 
     fn field(lon: f64, age: u8) -> Field {
-        Field::new(&Explosion {
+        Field::new(&Explosion { seed: 0,
             lon,
             lat: 0.0,
             radius_km: 600.0,

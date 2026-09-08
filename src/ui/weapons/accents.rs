@@ -199,7 +199,7 @@ mod tests {
             WeaponType::Bio,
             WeaponType::Chem,
         ] {
-            let mut exp = ExplosionRender {
+            let mut exp = ExplosionRender { seed: 0,
                 x: 5,
                 y: 3,
                 frame: 12,

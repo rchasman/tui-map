@@ -25,7 +25,7 @@ mod tests {
         let projection = Projection::Mercator(Viewport::new(0.0, 0.0, 6.0, 100, 96));
         let mut explosions: Vec<_> = [WeaponType::Nuke, WeaponType::Emp, WeaponType::Life, WeaponType::Tornado, WeaponType::Frost, WeaponType::Meteor]
             .into_iter()
-            .map(|weapon_type| ExplosionRender {
+            .map(|weapon_type| ExplosionRender { seed: 0,
                 x: 25,
                 y: 14,
                 frame: 15,
@@ -38,7 +38,7 @@ mod tests {
             .collect();
         let mut world = Interactions::default();
         for e in &explosions {
-            world.launch(&Explosion {
+            world.launch(&Explosion { seed: 0,
                 lon: e.lon,
                 lat: e.lat,
                 frame: e.frame,

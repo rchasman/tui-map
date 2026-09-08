@@ -179,7 +179,7 @@ mod tests {
     #[test]
     fn waves_survive_offscreen_centers_and_clip_in_both_projections() {
         let area = Rect::new(4, 3, 80, 30);
-        let field = Field::new(&Explosion {
+        let field = Field::new(&Explosion { seed: 0,
             lon: 95.0,
             lat: 0.0,
             frame: 30,

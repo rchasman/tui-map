@@ -104,7 +104,7 @@ mod tests {
     fn plumes_follow_material_age_and_vary_by_impact() {
         let area = Rect::new(0, 0, 80, 40);
         for weapon_type in [WeaponType::Bio, WeaponType::Chem] {
-            let mut exp = ExplosionRender {
+            let mut exp = ExplosionRender { seed: 0,
                 x: 40,
                 y: 20,
                 frame: 24,

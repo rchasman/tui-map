@@ -83,7 +83,7 @@ fn render_map(frame: &mut Frame, app: &mut App, area: Rect) {
         // Elevated volumes may remain visible after their surface anchor sets.
         if matches!(projection, Projection::Globe(_))
             && weapons::volume::is_raised(exp.weapon_type) {
-            explosions.push(ExplosionRender {
+            explosions.push(ExplosionRender { seed: exp.seed,
                 x: 0, y: 0, frame: exp.frame,
                 radius: (projection.deg_to_pixels(exp.radius_km / 111.0) as u16 / 2).max(3),
                 weapon_type: exp.weapon_type, lon: exp.lon, lat: exp.lat, radius_km: exp.radius_km,
@@ -126,7 +126,7 @@ fn render_map(frame: &mut Frame, app: &mut App, area: Rect) {
                 continue;
             }
 
-            explosions.push(ExplosionRender {
+            explosions.push(ExplosionRender { seed: exp.seed,
                 x: cx, y: cy, frame: exp.frame, radius, weapon_type: exp.weapon_type,
                 lon: exp.lon, lat: exp.lat, radius_km: exp.radius_km,
             });
