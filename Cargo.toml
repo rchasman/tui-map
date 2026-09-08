@@ -2,19 +2,20 @@
 name = "tui-map"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.88"
 description = "High-performance terminal map visualization using Braille Unicode"
 
 [dependencies]
-ratatui = "0.29"
-crossterm = "0.28"
-geojson = "0.24"
+ratatui = { version = "0.30.2", default-features = false, features = ["crossterm", "layout-cache"] }
+crossterm = "0.29"
+geojson = { version = "1.0", default-features = false }
 anyhow = "1"
-glam = "0.29"
+glam = { version = "0.33", default-features = false, features = ["std", "f64"] }
 rayon = "1.11.0"
-simd-json = "0.17.0"
+simd-json = "0.18"
 
 [dev-dependencies]
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { version = "0.8", features = ["html_reports"] }
 
 [[bench]]
 name = "hot_paths"

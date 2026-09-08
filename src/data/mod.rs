@@ -1,13 +1,12 @@
 use crate::map::{LineString, Lod, MapRenderer};
 use anyhow::Result;
-use geojson::{GeoJson, Geometry, Value};
+use geojson::{GeoJson, Geometry, GeometryValue};
 use rayon::prelude::*;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 /// Parse GeoJSON using SIMD-accelerated JSON parsing
-fn parse_geojson(content: String) -> Result<GeoJson> {
-    let mut bytes = content.into_bytes();
+fn parse_geojson(mut bytes: Vec<u8>) -> Result<GeoJson> {
     Ok(simd_json::serde::from_slice(&mut bytes)?)
 }
 
@@ -41,7 +40,7 @@ enum LoadResult {
 
 /// Load a single file and parse its geometries (no renderer dependency)
 fn load_file(path: &Path, kind: FileKind) -> LoadResult {
-    let content = match fs::read_to_string(path) {
+    let content = match fs::read(path) {
         Ok(c) => c,
         Err(e) => return LoadResult::Failed(
             path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
@@ -110,7 +109,7 @@ fn extract_cities(geojson: &GeoJson) -> Vec<CityData> {
                 .unwrap_or(false);
 
             if let Some(ref geometry) = feature.geometry {
-                if let Value::Point(ref coords) = geometry.value {
+                if let GeometryValue::Point { coordinates: ref coords } = geometry.value {
                     if coords.len() >= 2 {
                         cities.push(CityData {
                             lon: coords[0],
@@ -281,23 +280,23 @@ where
     F: FnMut(Vec<(f64, f64)>),
 {
     match &geometry.value {
-        Value::LineString(coords) => {
+        GeometryValue::LineString { coordinates: coords } => {
             let line: Vec<(f64, f64)> = coords.iter().map(|c| (c[0], c[1])).collect();
             add_line(line);
         }
-        Value::MultiLineString(lines) => {
+        GeometryValue::MultiLineString { coordinates: lines } => {
             for coords in lines {
                 let line: Vec<(f64, f64)> = coords.iter().map(|c| (c[0], c[1])).collect();
                 add_line(line);
             }
         }
-        Value::Polygon(rings) => {
+        GeometryValue::Polygon { coordinates: rings } => {
             if let Some(exterior) = rings.first() {
                 let line: Vec<(f64, f64)> = exterior.iter().map(|c| (c[0], c[1])).collect();
                 add_line(line);
             }
         }
-        Value::MultiPolygon(polygons) => {
+        GeometryValue::MultiPolygon { coordinates: polygons } => {
             for rings in polygons {
                 if let Some(exterior) = rings.first() {
                     let line: Vec<(f64, f64)> = exterior.iter().map(|c| (c[0], c[1])).collect();
@@ -305,7 +304,7 @@ where
                 }
             }
         }
-        Value::GeometryCollection(geometries) => {
+        GeometryValue::GeometryCollection { geometries } => {
             for g in geometries {
                 process_geometry_lines(g, add_line);
             }
@@ -343,14 +342,14 @@ where
     F: FnMut(Vec<Vec<(f64, f64)>>),
 {
     match &geometry.value {
-        Value::Polygon(rings) => {
+        GeometryValue::Polygon { coordinates: rings } => {
             let polygon: Vec<Vec<(f64, f64)>> = rings
                 .iter()
                 .map(|ring| ring.iter().map(|c| (c[0], c[1])).collect())
                 .collect();
             add_polygon(polygon);
         }
-        Value::MultiPolygon(polygons) => {
+        GeometryValue::MultiPolygon { coordinates: polygons } => {
             for rings in polygons {
                 let polygon: Vec<Vec<(f64, f64)>> = rings
                     .iter()
@@ -359,7 +358,7 @@ where
                 add_polygon(polygon);
             }
         }
-        Value::GeometryCollection(geometries) => {
+        GeometryValue::GeometryCollection { geometries } => {
             for g in geometries {
                 process_geometry_polygons(g, add_polygon);
             }
@@ -469,4 +468,47 @@ pub fn generate_simple_world(renderer: &mut MapRenderer) {
     renderer.add_city(-77.0, 38.9, "Washington", 5_300_000, true, false);
     renderer.add_city(-99.1, 19.4, "Mexico City", 21_800_000, true, true);
     renderer.add_city(-58.4, -34.6, "Buenos Aires", 15_000_000, true, true);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_nested_geometry_and_preserve_holes() {
+        let json = br#"{"type":"GeometryCollection","geometries":[
+            {"type":"LineString","coordinates":[[0,1],[2,3]]},
+            {"type":"MultiLineString","coordinates":[[[4,5],[6,7]]]},
+            {"type":"MultiPolygon","coordinates":[[
+                [[0,0],[4,0],[4,4],[0,0]],
+                [[1,1],[2,1],[1,2],[1,1]]
+            ]]}
+        ]}"#;
+        let geojson = parse_geojson(json.to_vec()).unwrap();
+        let mut lines = Vec::new();
+        process_geojson_lines(&geojson, |line| lines.push(line));
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0], vec![(0.0, 1.0), (2.0, 3.0)]);
+        assert_eq!(lines[1], vec![(4.0, 5.0), (6.0, 7.0)]);
+        let mut polygons = Vec::new();
+        process_geojson_polygons(&geojson, |polygon| polygons.push(polygon));
+        assert_eq!(polygons.len(), 1);
+        assert_eq!(polygons[0].len(), 2);
+        assert_eq!(polygons[0][1][0], (1.0, 1.0));
+    }
+
+    #[test]
+    fn parse_city_properties_and_null_geometry() {
+        let json = r#"{"type":"FeatureCollection","features":[
+            {"type":"Feature","geometry":{"type":"Point","coordinates":[2,48]},
+             "properties":{"name":"París","pop_max":2000000}},
+            {"type":"Feature","geometry":null,"properties":null}
+        ]}"#;
+        let cities = extract_cities(&parse_geojson(json.as_bytes().to_vec()).unwrap());
+        assert_eq!(cities.len(), 1);
+        assert_eq!(cities[0].name, "París");
+        assert_eq!(cities[0].population, 2_000_000);
+        assert_eq!((cities[0].lon, cities[0].lat), (2.0, 48.0));
+        assert!(parse_geojson(vec![0xff]).is_err());
+    }
 }
