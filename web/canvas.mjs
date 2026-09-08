@@ -23,7 +23,11 @@ return function paint(cells){
       const bits=code-0x2800,offsets=[[0,0],[0,1],[0,2],[1,0],[1,1],[1,2],[0,3],[1,3]];
       for(let bit=0;bit<8;bit++)if(bits&(1<<bit)){const [dx,dy]=offsets[bit];ctx.fillRect(x+cw*(dx*.5+.18),y+ch*(dy*.25+.08),Math.max(1,cw*.16),Math.max(1,ch*.085));}
     }else if(code===0x2588){ctx.fillRect(x,y,cw,ch);}
-    else{ctx.fillText(String.fromCodePoint(code),x,y+ch*.80,cw);}
+    else{
+      // Keep map pictograms monochrome and cell-sized instead of emoji blobs.
+      const textStyle=[0x2708,0x2601,0x2600,0x2744,0x26a0,0x2668].includes(code)?'\uFE0E':'';
+      ctx.fillText(String.fromCodePoint(code)+textStyle,x,y+ch*.80,cw);
+    }
     ctx.restore();
   }
   previous=cells;
