@@ -213,7 +213,7 @@ impl App {
         let pixel_height = inner_height * 4;
 
         Self {
-            projection: Projection::Globe(GlobeViewport::new(0.0, 20.0, pixel_width as f64 * 0.35, pixel_width, pixel_height)),
+            projection: Projection::Globe(GlobeViewport::new(0.0, 20.0, GlobeViewport::world_radius(pixel_width, pixel_height), pixel_width, pixel_height)),
             map_renderer: MapRenderer::new(),
             should_quit: false,
             last_mouse: None,

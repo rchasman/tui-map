@@ -58,7 +58,7 @@ impl GlobeViewport {
 
     /// Convert current Mercator viewport to globe, preserving center and proportional zoom.
     pub fn from_mercator(vp: &Viewport) -> Self {
-        let radius = vp.width as f64 * 0.35 * vp.zoom;
+        let radius = Self::world_radius(vp.width, vp.height) * vp.zoom;
         Self::new(vp.center_lon, vp.center_lat, radius, vp.width, vp.height)
     }
 
@@ -170,12 +170,12 @@ impl GlobeViewport {
 
     /// Zoom in by scaling the sphere radius.
     pub fn zoom_in(&mut self) {
-        self.radius = (self.radius * 1.5).min(self.width as f64 * 35.0);
+        self.radius = (self.radius * 1.5).min(Self::world_radius(self.width, self.height) * 100.0);
     }
 
     /// Zoom out by scaling the sphere radius.
     pub fn zoom_out(&mut self) {
-        self.radius = (self.radius / 1.5).max(self.width as f64 * 0.35);
+        self.radius = (self.radius / 1.5).max(Self::world_radius(self.width, self.height));
     }
 
     /// Zoom in towards a specific pixel location.
@@ -194,8 +194,8 @@ impl GlobeViewport {
         let target = self.unproject(px, py);
 
         // Apply zoom — bail if clamped (no actual change)
-        let min_r = self.width as f64 * 0.35;
-        let max_r = self.width as f64 * 35.0;
+        let min_r = Self::world_radius(self.width, self.height);
+        let max_r = Self::world_radius(self.width, self.height) * 100.0;
         let old_radius = self.radius;
         self.radius = (self.radius * factor).clamp(min_r, max_r);
         if self.radius == old_radius { return; }
@@ -328,7 +328,7 @@ impl GlobeViewport {
     /// Effective zoom level normalized to match Mercator's zoom=1 at world view.
     /// Used for LOD selection, blast radius, fire density, etc.
     pub fn effective_zoom(&self) -> f64 {
-        self.radius / (self.width as f64 * 0.35)
+        self.radius / (Self::world_radius(self.width, self.height))
     }
 
     /// Convert degrees to screen pixels for this projection.
@@ -337,8 +337,15 @@ impl GlobeViewport {
         degrees.to_radians() * self.radius
     }
 
+    /// Radius that fits the world in wide and tall viewports.
+    pub fn world_radius(width: usize, height: usize) -> f64 {
+        (width as f64 * 0.35).min(height as f64 * 0.45).max(1.0)
+    }
+
     /// Set viewport dimensions.
     pub fn set_size(&mut self, width: usize, height: usize) {
+        let zoom = self.effective_zoom();
+        self.radius = Self::world_radius(width, height) * zoom;
         self.width = width;
         self.height = height;
         self.half_w = width as f64 / 2.0;
@@ -496,3 +503,22 @@ mod tests {
     }
 }
 
+
+#[cfg(test)]
+mod viewport_fit_tests {
+    use super::GlobeViewport;
+
+    #[test]
+    fn world_fits_short_viewport_and_preserves_zoom_on_resize() {
+        let radius = GlobeViewport::world_radius(320, 80);
+        assert!(radius * 2.0 <= 80.0);
+        let mut globe = GlobeViewport::new(0.0, 20.0, radius, 320, 80);
+        globe.zoom_in();
+        let zoom = globe.effective_zoom();
+        globe.set_size(100, 160);
+        assert!((globe.effective_zoom() - zoom).abs() < 1e-10);
+        globe.zoom_out();
+        assert!((globe.effective_zoom() - 1.0).abs() < 1e-10);
+        assert!(globe.radius * 2.0 <= 100.0);
+    }
+}
