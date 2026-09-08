@@ -74,6 +74,16 @@ fn render_map(frame: &mut Frame, app: &mut App, area: Rect) {
     let mut explosions: Vec<ExplosionRender> = Vec::with_capacity(50);
     let is_globe = matches!(projection, Projection::Globe(_));
     for exp in &app.explosions {
+        // Elevated volumes may remain visible after their surface anchor sets.
+        if matches!(projection, Projection::Globe(_))
+            && weapons::volume::is_raised(exp.weapon_type) {
+            explosions.push(ExplosionRender {
+                x: 0, y: 0, frame: exp.frame,
+                radius: (projection.deg_to_pixels(exp.radius_km / 111.0) as u16 / 2).max(3),
+                weapon_type: exp.weapon_type, lon: exp.lon, lat: exp.lat, radius_km: exp.radius_km,
+            });
+            continue;
+        }
         // Globe: single project call (no wrapping needed)
         // Mercator: try wrap offsets
         let screen_positions: Vec<(i32, i32)> = if is_globe {

@@ -8,6 +8,7 @@ pub mod gas_clouds;
 mod accents;
 mod organic;
 mod aerosol;
+pub mod volume;
 pub mod composite;
 mod reactions;
 

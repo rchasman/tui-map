@@ -14,11 +14,10 @@ The full-screen terminal includes clickable Ratatui controls for effects, layers
 projection switching, pause, reset, and help (`?`). Controls wrap to fit narrow
 screens; the browser only hosts the canvas and forwards input.
 
-Requires Node.js 20+, Rust, and wasm-pack:
+Requires Node.js 24+ and rustup. The repo pins Rust 1.98.1 and wasm-pack 0.15.0:
 
 ```bash
-rustup target add wasm32-unknown-unknown
-cargo install wasm-pack --locked
+npm ci
 npm run build:web
 npm run test:web
 npm run dev:web
@@ -45,7 +44,7 @@ local project link. Generated bundles and account settings are not committed.
 
 ## Build
 
-Requires Rust 1.88 or newer.
+Rustup installs the pinned Rust 1.98.1 toolchain (including the WASM target).
 
 ```bash
 cargo build --release
@@ -114,6 +113,10 @@ or bundled datasets are copied. Third-party data retains its own terms.
 
 Effects blend light independently of drawing order and react in geographic space,
 so contact stays anchored while panning, zooming, or switching projections.
+
+On the globe, Nuke, Bio, Chem, and Life occupy volumes above the surface.
+Their height rotates with Earth: raised tops can remain visible beyond the horizon
+while the planet hides their bases. Particle trails use the same depth test.
 
 - **Water:** a quick splash settles into six seconds of flowing ripples and broken foam.
 - **Life:** uneven shoots branch into leaves and buds, then settle over seven seconds.

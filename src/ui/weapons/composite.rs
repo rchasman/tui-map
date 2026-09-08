@@ -268,6 +268,9 @@ impl Compositor {
         };
         self.begin(buf.area);
         for exp in explosions {
+            if let Some(g) = globe.filter(|_| super::volume::is_raised(exp.weapon_type)) {
+                super::volume::render(exp, g, area, &mut self.scratch);
+            } else {
             render_body(
                 exp,
                 area.x + exp.x,
@@ -277,6 +280,7 @@ impl Compositor {
                 &mut self.scratch,
                 globe,
             );
+            }
             if matches!(exp.weapon_type, WeaponType::Nuke | WeaponType::Chem)
                 && world.fields.iter().any(|f| f.weapon == WeaponType::Water)
             {
@@ -315,6 +319,7 @@ impl Compositor {
             self.collect(area);
         }
         for exp in explosions {
+            if globe.is_some() && super::volume::is_raised(exp.weapon_type) { continue; }
             accents::render(
                 exp,
                 area.x + exp.x,
