@@ -145,3 +145,33 @@ test('crosshair is default, every live layer shares Labels, and details stay out
     app.command('i');assert.equal(JSON.parse(app.status()).inspect,true);
   } finally {app.free();}
 });
+
+
+test('TUI layer picker preserves the header, stacks toggles and consumes map input', () => {
+  for (const [width,height] of [[120,40],[40,16]]) {
+    const app=new BrowserApp(width,height);
+    const lines=()=>{const cells=app.render();return Array.from({length:height},(_,row)=>
+      Array.from({length:width},(_,col)=>String.fromCodePoint(cells[(row*width+col)*3])).join(''));};
+    try {
+      assert.match(lines()[0],/World Map/);
+      assert.match(lines()[1],/Layers/);
+      app.command('3');
+      app.pointer('start',3,1);app.pointer('end',3,1);app.pointer('fire',3,1);
+      assert.equal(JSON.parse(app.status()).layersOpen,true);
+      assert.match(lines()[2],/b Borders/);
+      assert.match(lines()[3],/s States/);
+      app.pointer('fire',3,2);
+      assert.equal(JSON.parse(app.status()).mapLayers.b,false);
+      assert.equal(JSON.parse(app.status()).effects,0);
+      if(height===16){
+        for(let i=0;i<10;i++)app.pointer('out',3,2);
+        assert.ok(lines().some(line=>line.includes('p Population')));
+      }else{
+        assert.match(lines()[11],/p Population/);
+      }
+      app.command('Escape');
+      assert.equal(JSON.parse(app.status()).layersOpen,false);
+      assert.equal(JSON.parse(app.status()).weapon,'CROSSHAIR');
+    } finally {app.free();}
+  }
+});

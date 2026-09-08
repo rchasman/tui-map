@@ -21,6 +21,8 @@ pub struct BrowserApp {
     paused: bool,
     help: bool,
     map_drag: bool,
+    layers_open: bool,
+    layers_offset: u16,
 }
 
 #[wasm_bindgen]
@@ -44,6 +46,8 @@ impl BrowserApp {
             paused: false,
             help: false,
             map_drag: false,
+            layers_open: false,
+            layers_offset: 0,
         })
     }
 
@@ -67,6 +71,7 @@ impl BrowserApp {
 
     pub fn resize(&mut self, width: u16, height: u16) -> Result<(), JsValue> {
         let (width, height) = (width.clamp(40, 240), height.clamp(16, 100));
+        self.layers_offset = 0;
         self.width = width;
         self.height = height;
         self.app.resize(
@@ -100,6 +105,16 @@ impl BrowserApp {
             }
             return;
         }
+        let picker_height = ui::map_rows(&self.app, self.width, map_height);
+        if let Some(key) = ui::menu::layer_hit(self.width, picker_height, self.layers_open, self.layers_offset, col, row) {
+            self.app.mouse_pos = None;
+            if kind == "start" { self.map_drag = false; self.app.end_drag(); }
+            if kind == "in" { self.layers_offset = self.layers_offset.saturating_sub(1); }
+            if kind == "out" { self.layers_offset = (self.layers_offset + 1).min(10 - ui::menu::layer_visible_rows(picker_height)); }
+            if kind == "fire" { self.command(key); }
+            return;
+        }
+        if kind == "start" { self.layers_open = false; }
         if row >= map_height {
             self.app.mouse_pos = None;
             if kind == "start" {
@@ -142,6 +157,7 @@ impl BrowserApp {
     pub fn command(&mut self, key: &str) {
         if key == "Escape" {
             self.help = false;
+            self.layers_open = false;
             self.app.feeds.command(key);
             return;
         }
@@ -156,6 +172,7 @@ impl BrowserApp {
         }
         match key {
             "?" => self.help = true,
+            "v" => self.layers_open = !self.layers_open,
             "1" => self.app.select_weapon(WeaponType::Water),
             "2" => self.app.select_weapon(WeaponType::Life),
             "3" => self.app.select_weapon(WeaponType::Nuke),
@@ -226,6 +243,8 @@ impl BrowserApp {
                     &mut self.app,
                     ratatui::layout::Rect::new(0, 0, self.width, map_height),
                 );
+                ui::menu::render_layers(frame, &self.app, self.width,
+                    ui::map_rows(&self.app, self.width, map_height), self.layers_open, self.layers_offset);
                 ui::menu::render(
                     frame,
                     &self.app,
@@ -280,7 +299,7 @@ impl BrowserApp {
             }))
         });
         let settings = &self.app.map_renderer.settings;
-        serde_json::json!({"mapLayers":{
+        serde_json::json!({"layersOpen":self.layers_open,"mapLayers":{
             "b":settings.show_borders,"s":settings.show_states,"y":settings.show_counties,
             "c":settings.show_cities,"L":settings.show_labels,"p":settings.show_population
         },"details":details,"feeds":self.app.feeds.status(),"inspect":self.app.feeds.inspect,"selected":self.app.feeds.selected,"weapon":if self.app.feeds.inspect {"CROSSHAIR"} else {self.app.active_weapon.label()},

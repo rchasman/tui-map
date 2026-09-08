@@ -124,6 +124,63 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect, help: bool) {
     }
 }
 
+/// The picker is drawn and hit-tested in terminal cells inside the map border.
+const LAYERS: [(&str, &str); 10] = [
+    ("b", "Borders"), ("s", "States"), ("y", "Counties"), ("c", "Cities"),
+    ("e", "Quakes"), ("d", "Hazards"), ("a", "Aircraft"), ("t", "Satellites"),
+    ("L", "Labels"), ("p", "Population"),
+];
+
+fn enabled(app: &App) -> [bool; 10] {
+    let s = &app.map_renderer.settings;
+    [s.show_borders, s.show_states, s.show_counties, s.show_cities,
+     app.feeds.layers[0].enabled, app.feeds.layers[1].enabled,
+     app.feeds.layers[2].enabled, app.feeds.layers[3].enabled,
+     s.show_labels, s.show_population]
+}
+
+fn layer_area(width: u16, height: u16, open: bool) -> Rect {
+    Rect::new(1, 1, if open { width.saturating_sub(2).min(40) } else { width.saturating_sub(2) },
+        if open { height.saturating_sub(2).min(12) } else { 1 })
+}
+
+pub fn layer_visible_rows(height: u16) -> u16 { height.saturating_sub(4).min(10) }
+
+pub fn layer_hit(width: u16, height: u16, open: bool, offset: u16, col: u16, row: u16) -> Option<&'static str> {
+    let area = layer_area(width, height, open);
+    if !area.contains((col, row).into()) { return None; }
+    if row == area.y { return Some("v"); }
+    if open && row < area.bottom() - 1 {
+        return LAYERS.get((offset + row - area.y - 1) as usize).map(|item| item.0);
+    }
+    Some("")
+}
+
+pub fn render_layers(frame: &mut Frame, app: &App, width: u16, height: u16, open: bool, offset: u16) {
+    let area = layer_area(width, height, open);
+    let states = enabled(app);
+    let count = states[..8].iter().filter(|&&on| on).count();
+    let names = LAYERS[..8].iter().zip(states).filter(|(_, on)| *on)
+        .map(|((_, name), _)| *name).collect::<Vec<_>>().join(" · ");
+    frame.render_widget(Clear, area);
+    frame.render_widget(Paragraph::new(format!("[v Layers: {count} {}]{}", if open { "−" } else { "+" }, if open { String::new() } else { format!(" {names}") }))
+        .style(Style::default().fg(Color::Cyan).bg(Color::Reset)),
+        Rect::new(area.x, area.y, area.width, 1));
+    if !open { return; }
+    let rows = layer_visible_rows(height);
+    for (i, ((key, name), on)) in LAYERS.iter().zip(states).enumerate().skip(offset as usize).take(rows as usize) {
+        let suffix = if (4..8).contains(&i) && on {
+            let layer = &app.feeds.layers[i - 4];
+            format!(" · {} {}", if layer.visible(app.feeds.now) { layer.markers.len() } else { 0 }, layer.state(app.feeds.now))
+        } else { String::new() };
+        let row = Rect::new(area.x, area.y + 1 + i as u16 - offset, area.width, 1);
+        frame.render_widget(Paragraph::new(format!(" [{mark}] {key} {name}{suffix}", mark=if on { "x" } else { " " }))
+            .style(Style::default().fg(if on { Color::White } else { Color::DarkGray })), row);
+    }
+    frame.render_widget(Paragraph::new(if rows < 10 { format!(" ↑↓  {}–{} / 10", offset + 1, offset + rows) } else { "─".repeat(area.width as usize) }).style(Style::default().fg(Color::DarkGray)),
+        Rect::new(area.x, area.bottom() - 1, area.width, 1));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

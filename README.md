@@ -12,7 +12,7 @@ scroll or use the zoom buttons, and click to release any of the nine effects.
 Crosshair selection is the default; Escape clears the selected effect.
 The bottom bar includes clickable Ratatui controls for effects, projection switching,
 crosshair selection, reset, and help (`?`). Controls wrap to fit narrow screens.
-The browser hosts a compact layer picker at the top left and selected details at the top right.
+The TUI renders a compact layer picker below its World Map header (click or press v); selected browser details appear at the top right.
 
 Requires Node.js 24+ and rustup. The repo pins Rust 1.98.1 and wasm-pack 0.15.0:
 

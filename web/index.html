@@ -14,10 +14,6 @@
 <body>
   <main id="stage" aria-label="Terminal map application">
     <canvas id="world" tabindex="0" aria-label="Interactive terminal globe. Drag to rotate, scroll to zoom, click to select a marker or use a selected effect. Click labels to inspect. Press 1 to 9 to select effects, G to switch projection, Escape to return to the crosshair, R to reset, and ? for help."></canvas>
-    <nav id="layers" aria-label="Map layers">
-      <button id="layers-toggle" type="button" aria-expanded="false" aria-controls="layers-panel" disabled>Layers · loading</button>
-      <div id="layers-panel" hidden></div>
-    </nav>
     <aside id="inspector" aria-labelledby="inspector-title" hidden>
       <header><h2 id="inspector-title"></h2><button id="inspector-close" type="button" aria-label="Close details">×</button></header>
       <div class="inspector-body">
