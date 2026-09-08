@@ -6,6 +6,8 @@ pub mod life;
 pub mod chem;
 pub mod gas_clouds;
 mod accents;
+pub mod composite;
+mod reactions;
 
 use crate::app::WeaponType;
 use crate::map::GlobeViewport;
@@ -23,11 +25,8 @@ pub struct ExplosionRender {
     pub radius_km: f64,
 }
 
-/// Screen-space gas cloud ready for rendering
+/// Geographic gas cloud ready for density sampling
 pub struct GasCloudRender {
-    pub x: u16,
-    pub y: u16,
-    pub radius: u16,
     pub intensity: u16,
     pub weapon_type: WeaponType,
     pub lon: f64,
@@ -63,6 +62,11 @@ pub fn weapon_color(weapon: WeaponType) -> Color {
 /// Dispatch explosion rendering to the appropriate weapon renderer
 pub fn render_explosion(exp: &ExplosionRender, x: u16, y: u16, area: Rect, global_frame: u64, buf: &mut Buffer, globe: Option<&GlobeViewport>) {
     accents::render(exp, x, y, area, buf, globe, false);
+    render_body(exp, x, y, area, global_frame, buf, globe);
+    accents::render(exp, x, y, area, buf, globe, true);
+}
+
+fn render_body(exp: &ExplosionRender, x: u16, y: u16, area: Rect, global_frame: u64, buf: &mut Buffer, globe: Option<&GlobeViewport>) {
     match exp.weapon_type {
         WeaponType::Nuke => nuke::render(exp, x, y, area, global_frame, buf, globe),
         WeaponType::Bio => bio::render(exp, x, y, area, global_frame, buf, globe),
@@ -71,7 +75,6 @@ pub fn render_explosion(exp: &ExplosionRender, x: u16, y: u16, area: Rect, globa
         WeaponType::Life => life::render(exp, x, y, area, global_frame, buf, globe),
         WeaponType::Chem => chem::render(exp, x, y, area, global_frame, buf, globe),
     }
-    accents::render(exp, x, y, area, buf, globe, true);
 }
 
 /// Fast acos approximation for dot products.

@@ -3,7 +3,7 @@ pub mod weapons;
 use crate::app::{App, WeaponType};
 use crate::hash::hash3;
 use crate::map::{MapLayers, Projection, WRAP_OFFSETS};
-use weapons::{ExplosionRender, GasCloudRender, weapon_color, render_explosion, gas_clouds};
+use weapons::{ExplosionRender, GasCloudRender, weapon_color, gas_clouds};
 
 use ratatui::{
     buffer::Buffer,
@@ -119,47 +119,11 @@ fn render_map(frame: &mut Frame, app: &mut App, area: Rect) {
         explosions.truncate(MAX_VISIBLE_EXPLOSIONS);
     }
 
-    // Project gas clouds to screen coordinates
-    let mut gas_clouds: Vec<GasCloudRender> = Vec::with_capacity(app.gas_clouds.len());
-    for cloud in &app.gas_clouds {
-        let screen_positions: Vec<(i32, i32)> = if is_globe {
-            projection.project_point(cloud.lon, cloud.lat).into_iter().collect()
-        } else {
-            if let Projection::Mercator(ref vp) = projection {
-                WRAP_OFFSETS.iter().filter_map(|&offset| {
-                    let ((px, py), _) = vp.project_wrapped(cloud.lon, cloud.lat, offset);
-                    (px >= 0 && py >= 0 && px <= 30000 && py <= 30000).then_some((px, py))
-                }).collect()
-            } else {
-                Vec::new()
-            }
-        };
-
-        for (px, py) in screen_positions {
-            let cx = (px / 2) as u16;
-            let cy = (py / 4) as u16;
-
-            let degrees = cloud.current_radius_km / 111.0;
-            let pixels = projection.deg_to_pixels(degrees) as u16;
-            let radius = (pixels / 2).max(3);
-
-            if radius < 2 { continue; }
-
-            let left_edge = cx.saturating_sub(radius);
-            let top_edge = cy.saturating_sub(radius);
-            let right_edge = cx.saturating_add(radius);
-            let bottom_edge = cy.saturating_add(radius);
-
-            if right_edge < 1 || bottom_edge < 1 || left_edge >= inner.width || top_edge >= inner.height {
-                continue;
-            }
-
-            gas_clouds.push(GasCloudRender {
-                x: cx, y: cy, radius, intensity: cloud.intensity, weapon_type: cloud.weapon_type,
-                lon: cloud.lon, lat: cloud.lat, radius_km: cloud.current_radius_km,
-            });
-        }
-    }
+    // Cloud extents are sampled geographically, even when their centers are offscreen.
+    let gas_clouds: Vec<GasCloudRender> = app.gas_clouds.iter().map(|cloud| GasCloudRender {
+        intensity: cloud.intensity, weapon_type: cloud.weapon_type,
+        lon: cloud.lon, lat: cloud.lat, radius_km: cloud.current_radius_km,
+    }).collect();
 
     // Screen-space fire map: reuse buffers across frames to avoid per-frame allocation
     let fire_map_width = inner.width as usize;
@@ -332,6 +296,8 @@ fn render_map(frame: &mut Frame, app: &mut App, area: Rect) {
         cursor_blast_km,
         active_weapon: app.active_weapon,
         explosions,
+        interactions: &app.interactions,
+        compositor: &mut app.effect_compositor,
         fires,
         gas_clouds,
         density_buf: &mut app.gas_density_buf,
@@ -360,6 +326,8 @@ struct MapWidget<'a> {
     cursor_blast_km: f64,
     active_weapon: WeaponType,
     explosions: Vec<ExplosionRender>,
+    interactions: &'a crate::interactions::Interactions,
+    compositor: &'a mut weapons::composite::Compositor,
     fires: Vec<FireRender>,
     gas_clouds: Vec<GasCloudRender>,
     density_buf: &'a mut [(f32, f32)],
@@ -446,7 +414,7 @@ impl<'a> Widget for MapWidget<'a> {
         }
 
         // Render gas clouds — merged density so overlapping clouds blend
-        gas_clouds::render_merged(&self.gas_clouds, self.density_buf, area, self.frame, buf, self.projection);
+        gas_clouds::render_interacting(&self.gas_clouds, self.density_buf, area, self.frame, buf, self.projection, self.interactions);
 
         // City markers and labels — rendered ON TOP of fires so population
         // damage is visible through the flames
@@ -490,15 +458,8 @@ impl<'a> Widget for MapWidget<'a> {
         }
 
         // Render explosions — dispatch per weapon type
-        let globe_ref = match &self.projection {
-            Projection::Globe(g) => Some(g),
-            _ => None,
-        };
-        for exp in &self.explosions {
-            let x = area.x + exp.x;
-            let y = area.y + exp.y;
-            render_explosion(exp, x, y, area, self.frame, buf, globe_ref);
-        }
+        self.compositor.render(&self.explosions, self.interactions, self.projection,
+            area, self.frame, buf);
 
         // Render cursor targeting reticle — color from active weapon
         let reticle_color = weapon_color(self.active_weapon);

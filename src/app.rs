@@ -170,6 +170,8 @@ pub struct App {
     pub mouse_pos: Option<(u16, u16)>,
     /// Active explosions
     pub explosions: Vec<Explosion>,
+    pub interactions: crate::interactions::Interactions,
+    pub effect_compositor: crate::ui::weapons::composite::Compositor,
     /// Active fires
     pub fires: Vec<Fire>,
     /// Coarse 1° fire grid for zoomed-out rendering
@@ -217,6 +219,8 @@ impl App {
             last_mouse: None,
             mouse_pos: None,
             explosions: Vec::new(),
+            interactions: crate::interactions::Interactions::default(),
+            effect_compositor: crate::ui::weapons::composite::Compositor::default(),
             fires: Vec::new(),
             fire_grid: FireGrid::new(1.0),
             fire_grid_fine: FireGrid::new(0.25),
@@ -385,13 +389,15 @@ impl App {
             _ => base_radius,
         };
 
-        self.explosions.push(Explosion {
+        let explosion = Explosion {
             lon,
             lat,
             frame: 0,
             radius_km,
             weapon_type: weapon,
-        });
+        };
+        self.interactions.launch(&explosion);
+        self.explosions.push(explosion);
 
         // Restorative weapons: heal instead of destroy
         if weapon.is_restorative() {
@@ -545,18 +551,8 @@ impl App {
         }
     }
 
-    /// Water: extinguish fires, clear fallout and gas clouds in the blast area
+    /// Water clears contamination; fires react when the advancing wave reaches them.
     fn apply_water_effect(&mut self, lon: f64, lat: f64, radius_km: f64) {
-        let radius_deg = radius_km / 111.0;
-        let cos_lat = lat.to_radians().cos().max(0.1);
-
-        // Extinguish fires within radius
-        self.fires.retain(|fire| {
-            let dlat = (fire.lat - lat).abs();
-            let dlon = (fire.lon - lon).abs() * cos_lat;
-            dlat * dlat + dlon * dlon > radius_deg * radius_deg
-        });
-
         // Clear fallout zones that overlap
         for zone in &mut self.fallout {
             let dist = fast_distance_km(lon, lat, zone.lon, zone.lat);
@@ -629,6 +625,8 @@ impl App {
             exp.frame < exp.weapon_type.max_frames()
         });
 
+        let reacted = self.interactions.update(&mut self.fires);
+
         // Update fires - VERY slow decay and VERY aggressive spreading
         // Pre-allocate for spreading fires (estimate ~15% spread rate × avg 1.5 fires)
         let mut new_fires = Vec::with_capacity(self.fires.len() / 5);
@@ -697,6 +695,13 @@ impl App {
             cloud.intensity > 0
         });
 
+        // Reactions must reach the damage grid immediately; ordinary spread and
+        // decay can keep the five-frame cadence.
+        if reacted || self.frame % 5 == 0 {
+            self.fire_grid.rebuild(&self.fires);
+            self.fire_grid_fine.rebuild(&self.fires);
+        }
+
         // Apply ongoing damage every 10 frames (imperceptible skip)
         // Flipped join: iterate cities and probe fire grid, not fires → city query.
         // O(7K cities) with O(1) grid lookups instead of O(25K fires) with HashMap queries.
@@ -728,15 +733,7 @@ impl App {
             }
         }
 
-        // Rebuild fire grids every 5 frames — fires spread/decay slowly,
-        // so the grid is accurate enough between rebuilds.
-        // Saves 60K grid insertions/frame → 12K/frame (5× reduction).
-        if self.frame % 5 == 0 {
-            self.fire_grid.rebuild(&self.fires);
-            self.fire_grid_fine.rebuild(&self.fires);
-        }
-
-        !self.explosions.is_empty() || !self.fires.is_empty() || !self.fallout.is_empty() || !self.gas_clouds.is_empty()
+        self.interactions.active() || !self.explosions.is_empty() || !self.fires.is_empty() || !self.fallout.is_empty() || !self.gas_clouds.is_empty()
     }
 
     /// Flipped join: for each city, probe fire grid neighborhood to check if burning.
