@@ -1,4 +1,5 @@
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use std::hint::black_box;
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use tui_map::braille::BrailleCanvas;
 use tui_map::map::geometry::draw_line;
 use tui_map::map::projection::{mercator_x, mercator_y, Viewport, WRAP_OFFSETS};
@@ -537,6 +538,7 @@ fn bench_full_render(c: &mut Criterion) {
         group.bench_function(format!("mercator_{label}"), |b| {
             let projection = tui_map::map::Projection::Mercator(Viewport::new(0.0, 30.0, zoom, width * 2, height * 4));
             b.iter(|| {
+                renderer.invalidate_cache();
                 black_box(renderer.render(width, height, &projection));
             });
         });
@@ -545,11 +547,28 @@ fn bench_full_render(c: &mut Criterion) {
         group.bench_function(format!("globe_{label}"), |b| {
             let projection = tui_map::map::Projection::Globe(GlobeViewport::new(0.0, 30.0, width as f64 * 0.35 * zoom, width * 2, height * 4));
             b.iter(|| {
+                renderer.invalidate_cache();
                 black_box(renderer.render(width, height, &projection));
             });
         });
     }
 
+    group.finish();
+}
+
+// Measure cache hits separately from the uncached full_render workloads.
+fn bench_render_cache(c: &mut Criterion) {
+    let mut renderer = MapRenderer::new();
+    tui_map::data::generate_simple_world(&mut renderer);
+    renderer.build_spatial_indexes();
+    let mut group = c.benchmark_group("render_cache");
+    for (name, projection) in [
+        ("mercator", tui_map::map::Projection::Mercator(Viewport::new(0.0, 30.0, 1.0, 400, 200))),
+        ("globe", tui_map::map::Projection::Globe(GlobeViewport::new(0.0, 30.0, 70.0, 400, 200))),
+    ] {
+        renderer.render(200, 50, &projection);
+        group.bench_function(name, |b| b.iter(|| black_box(renderer.render(200, 50, &projection))));
+    }
     group.finish();
 }
 
@@ -898,6 +917,7 @@ criterion_group!(
     bench_fire_grid,
     bench_draw_linestring_mercator,
     bench_full_render,
+    bench_render_cache,
     bench_real_data_render,
     bench_fire_map_clear,
     bench_gas_density_buf,
