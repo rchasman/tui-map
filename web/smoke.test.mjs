@@ -155,6 +155,11 @@ test('TUI layer picker preserves the header, stacks toggles and consumes map inp
     try {
       assert.match(lines()[0],/World Map/);
       assert.match(lines()[1],/Layers/);
+      assert.doesNotMatch(lines()[1],/Borders/);
+      assert.match(lines()[2],/Borders/);
+      assert.match(lines()[3],/States/);
+      const cells=app.render();
+      assert.notEqual(cells[(2*width+4)*3+1],cells[(3*width+4)*3+1]);
       app.command('3');
       app.pointer('start',3,1);app.pointer('end',3,1);app.pointer('fire',3,1);
       assert.equal(JSON.parse(app.status()).layersOpen,true);

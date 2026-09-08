@@ -106,7 +106,7 @@ impl BrowserApp {
             return;
         }
         let picker_height = ui::map_rows(&self.app, self.width, map_height);
-        if let Some(key) = ui::menu::layer_hit(self.width, picker_height, self.layers_open, self.layers_offset, col, row) {
+        if let Some(key) = ui::menu::layer_hit(&self.app, self.width, picker_height, self.layers_open, self.layers_offset, col, row) {
             self.app.mouse_pos = None;
             if kind == "start" { self.map_drag = false; self.app.end_drag(); }
             if kind == "in" { self.layers_offset = self.layers_offset.saturating_sub(1); }

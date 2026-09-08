@@ -1,5 +1,5 @@
 //! Cell-based browser controls. Rendering and hit testing share one layout.
-use crate::app::App;
+use crate::app::{App, WeaponType};
 use ratatui::{
     layout::Rect,
     style::{Color, Style},
@@ -71,7 +71,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect, help: bool) {
     frame.render_widget(
         Block::default()
             .borders(Borders::ALL)
-            .title(" Controls · click or press key ")
+            .title(" Effects · Navigation ")
             .border_style(Style::default().fg(Color::DarkGray)),
         area,
     );
@@ -92,10 +92,23 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect, help: bool) {
         let selected =
             selected && !(app.feeds.inspect && item.key.chars().all(|c| c.is_ascii_digit()));
         let label = item.label;
+        let tint = match item.key {
+            "1" => super::weapons::weapon_color(WeaponType::Water),
+            "2" => super::weapons::weapon_color(WeaponType::Life),
+            "3" => super::weapons::weapon_color(WeaponType::Nuke),
+            "4" => super::weapons::weapon_color(WeaponType::Bio),
+            "5" => super::weapons::weapon_color(WeaponType::Emp),
+            "6" => super::weapons::weapon_color(WeaponType::Chem),
+            "7" => super::weapons::weapon_color(WeaponType::Tornado),
+            "8" => super::weapons::weapon_color(WeaponType::Frost),
+            "9" => super::weapons::weapon_color(WeaponType::Meteor),
+            "Escape" => Color::Cyan,
+            _ => Color::Gray,
+        };
         let style = if selected {
-            Style::default().fg(Color::Black).bg(Color::Cyan)
+            Style::default().fg(Color::Black).bg(tint)
         } else {
-            Style::default().fg(Color::Gray)
+            Style::default().fg(tint)
         };
         frame.render_widget(
             Paragraph::new(format!("[{label}]")).style(style),
@@ -139,17 +152,32 @@ fn enabled(app: &App) -> [bool; 10] {
      s.show_labels, s.show_population]
 }
 
-fn layer_area(width: u16, height: u16, open: bool) -> Rect {
-    Rect::new(1, 1, if open { width.saturating_sub(2).min(40) } else { width.saturating_sub(2) },
-        if open { height.saturating_sub(2).min(12) } else { 1 })
+fn layer_color(index: usize) -> Color {
+    match index {
+        0 => Color::Cyan,
+        1 => Color::Blue,
+        2 => Color::LightBlue,
+        3 => Color::Green,
+        4 => Color::LightRed,
+        5 => Color::LightYellow,
+        6 => Color::LightCyan,
+        7 => Color::LightMagenta,
+        _ => Color::White,
+    }
+}
+
+fn layer_area(app: &App, width: u16, height: u16, open: bool) -> Rect {
+    let count = enabled(app)[..8].iter().filter(|&&on| on).count() as u16;
+    Rect::new(1, 1, width.saturating_sub(2).min(if open { 40 } else { 24 }),
+        if open { height.saturating_sub(2).min(12) } else { (count + 1).min(height.saturating_sub(2)) })
 }
 
 pub fn layer_visible_rows(height: u16) -> u16 { height.saturating_sub(4).min(10) }
 
-pub fn layer_hit(width: u16, height: u16, open: bool, offset: u16, col: u16, row: u16) -> Option<&'static str> {
-    let area = layer_area(width, height, open);
+pub fn layer_hit(app: &App, width: u16, height: u16, open: bool, offset: u16, col: u16, row: u16) -> Option<&'static str> {
+    let area = layer_area(app, width, height, open);
     if !area.contains((col, row).into()) { return None; }
-    if row == area.y { return Some("v"); }
+    if row == area.y || !open { return Some("v"); }
     if open && row < area.bottom() - 1 {
         return LAYERS.get((offset + row - area.y - 1) as usize).map(|item| item.0);
     }
@@ -157,16 +185,26 @@ pub fn layer_hit(width: u16, height: u16, open: bool, offset: u16, col: u16, row
 }
 
 pub fn render_layers(frame: &mut Frame, app: &App, width: u16, height: u16, open: bool, offset: u16) {
-    let area = layer_area(width, height, open);
+    let area = layer_area(app, width, height, open);
     let states = enabled(app);
     let count = states[..8].iter().filter(|&&on| on).count();
-    let names = LAYERS[..8].iter().zip(states).filter(|(_, on)| *on)
-        .map(|((_, name), _)| *name).collect::<Vec<_>>().join(" · ");
     frame.render_widget(Clear, area);
-    frame.render_widget(Paragraph::new(format!("[v Layers: {count} {}]{}", if open { "−" } else { "+" }, if open { String::new() } else { format!(" {names}") }))
-        .style(Style::default().fg(Color::Cyan).bg(Color::Reset)),
+    frame.render_widget(Paragraph::new(format!("[v Layers: {count} {}]", if open { "−" } else { "+" }))
+        .style(Style::default().fg(Color::Cyan)),
         Rect::new(area.x, area.y, area.width, 1));
-    if !open { return; }
+    if !open {
+        for (row, (i, (_, name))) in LAYERS[..8].iter().enumerate().filter(|(i, _)| states[*i])
+            .take(area.height.saturating_sub(1) as usize).enumerate() {
+            let count = if (4..8).contains(&i) {
+                let layer = &app.feeds.layers[i - 4];
+                format!(" · {}", if layer.visible(app.feeds.now) { layer.markers.len() } else { 0 })
+            } else { String::new() };
+            frame.render_widget(Paragraph::new(format!(" • {name}{count}"))
+                .style(Style::default().fg(layer_color(i))),
+                Rect::new(area.x, area.y + 1 + row as u16, area.width, 1));
+        }
+        return;
+    }
     let rows = layer_visible_rows(height);
     for (i, ((key, name), on)) in LAYERS.iter().zip(states).enumerate().skip(offset as usize).take(rows as usize) {
         let suffix = if (4..8).contains(&i) && on {
@@ -175,7 +213,7 @@ pub fn render_layers(frame: &mut Frame, app: &App, width: u16, height: u16, open
         } else { String::new() };
         let row = Rect::new(area.x, area.y + 1 + i as u16 - offset, area.width, 1);
         frame.render_widget(Paragraph::new(format!(" [{mark}] {key} {name}{suffix}", mark=if on { "x" } else { " " }))
-            .style(Style::default().fg(if on { Color::White } else { Color::DarkGray })), row);
+            .style(Style::default().fg(if on { layer_color(i) } else { Color::DarkGray })), row);
     }
     frame.render_widget(Paragraph::new(if rows < 10 { format!(" ↑↓  {}–{} / 10", offset + 1, offset + rows) } else { "─".repeat(area.width as usize) }).style(Style::default().fg(Color::DarkGray)),
         Rect::new(area.x, area.bottom() - 1, area.width, 1));
