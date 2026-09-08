@@ -114,7 +114,10 @@ fn run(terminal: &mut DefaultTerminal) -> Result<()> {
                             }
                         }
                         match key.code {
-                            KeyCode::Char('q') | KeyCode::Esc => app.quit(),
+                            KeyCode::Char('q') => app.quit(),
+                            KeyCode::Esc => {
+                                app.feeds.command("Escape");
+                            }
 
                             // Pan with hjkl or arrow keys
                             KeyCode::Left | KeyCode::Char('h') => app.pan(-10, 0),
@@ -152,15 +155,15 @@ fn run(terminal: &mut DefaultTerminal) -> Result<()> {
                             }
 
                             // Weapon selection
-                            KeyCode::Char('1') => app.select_weapon(WeaponType::Nuke),
-                            KeyCode::Char('2') => app.select_weapon(WeaponType::Bio),
-                            KeyCode::Char('3') => app.select_weapon(WeaponType::Emp),
-                            KeyCode::Char('4') => app.select_weapon(WeaponType::Chem),
-                            KeyCode::Char('5') => app.select_weapon(WeaponType::Water),
-                            KeyCode::Char('6') => app.select_weapon(WeaponType::Life),
-                            KeyCode::Char('o') => app.select_weapon(WeaponType::Tornado),
-                            KeyCode::Char('f') => app.select_weapon(WeaponType::Frost),
-                            KeyCode::Char('m') => app.select_weapon(WeaponType::Meteor),
+                            KeyCode::Char('1') => app.select_weapon(WeaponType::Water),
+                            KeyCode::Char('2') => app.select_weapon(WeaponType::Life),
+                            KeyCode::Char('3') => app.select_weapon(WeaponType::Nuke),
+                            KeyCode::Char('4') => app.select_weapon(WeaponType::Bio),
+                            KeyCode::Char('5') => app.select_weapon(WeaponType::Emp),
+                            KeyCode::Char('6') => app.select_weapon(WeaponType::Chem),
+                            KeyCode::Char('7') => app.select_weapon(WeaponType::Tornado),
+                            KeyCode::Char('8') => app.select_weapon(WeaponType::Frost),
+                            KeyCode::Char('9') => app.select_weapon(WeaponType::Meteor),
 
                             // Launch weapon at cursor
                             KeyCode::Char(' ') => {
@@ -179,6 +182,8 @@ fn run(terminal: &mut DefaultTerminal) -> Result<()> {
                                 let feeds = std::mem::take(&mut app.feeds);
                                 app = App::new(size.width as usize, size.height as usize);
                                 app.feeds = feeds;
+                                app.feeds.inspect = true;
+                                app.feeds.selected = None;
                                 let _ = data::load_all_geojson(&mut app.map_renderer, data_dir);
                                 if !app.map_renderer.has_data() {
                                     data::generate_simple_world(&mut app.map_renderer);

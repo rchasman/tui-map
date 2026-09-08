@@ -9,21 +9,21 @@ use ratatui::{
 
 const GROUPS: &[&[(&str, &str)]] = &[
     &[
+        ("Escape", "Esc Crosshair"),
         ("1", "1 Water"),
         ("2", "2 Life"),
         ("3", "3 Nuke"),
         ("4", "4 Bio"),
         ("5", "5 EMP"),
         ("6", "6 Chem"),
-        ("o", "o Tornado"),
-        ("f", "f Frost"),
-        ("m", "m Meteor"),
+        ("7", "7 Tornado"),
+        ("8", "8 Frost"),
+        ("9", "9 Meteor"),
     ],
     &[
         ("g", "g Globe/map"),
         ("-", "-"),
         ("+", "+"),
-        ("Escape", "Esc Pause"),
         ("r", "r Reset"),
         ("?", "? Help"),
     ],
@@ -35,7 +35,12 @@ const GROUPS: &[&[(&str, &str)]] = &[
         ("L", "L Labels"),
         ("p", "p Population"),
     ],
-    &[("7", "7 Quakes"), ("8", "8 Hazards"), ("9", "9 Aircraft"), ("t", "t Satellites"), ("i", "i Inspect")],
+    &[
+        ("e", "e Quakes"),
+        ("d", "d Hazards"),
+        ("a", "a Aircraft"),
+        ("t", "t Satellites"),
+    ],
 ];
 
 pub struct Item {
@@ -75,7 +80,7 @@ pub fn hit(width: u16, col: u16, row: u16) -> Option<&'static str> {
         .map(|item| item.key)
 }
 
-pub fn render(frame: &mut Frame, app: &App, area: Rect, paused: bool, help: bool) {
+pub fn render(frame: &mut Frame, app: &App, area: Rect, help: bool) {
     frame.render_widget(
         Block::default()
             .borders(Borders::ALL)
@@ -92,28 +97,25 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect, paused: bool, help: bool
             "4" => app.active_weapon.label() == "BIO",
             "5" => app.active_weapon.label() == "EMP",
             "6" => app.active_weapon.label() == "CHEM",
-            "o" => app.active_weapon.label() == "TORNADO",
-            "f" => app.active_weapon.label() == "FROST",
-            "m" => app.active_weapon.label() == "METEOR",
+            "7" => app.active_weapon.label() == "TORNADO",
+            "8" => app.active_weapon.label() == "FROST",
+            "9" => app.active_weapon.label() == "METEOR",
             "b" => settings.show_borders,
             "s" => settings.show_states,
             "y" => settings.show_counties,
             "c" => settings.show_cities,
             "L" => settings.show_labels,
             "p" => settings.show_population,
-            "7" => app.feeds.layers[0].enabled,
-            "8" => app.feeds.layers[1].enabled,
-            "9" => app.feeds.layers[2].enabled,
+            "e" => app.feeds.layers[0].enabled,
+            "d" => app.feeds.layers[1].enabled,
+            "a" => app.feeds.layers[2].enabled,
             "t" => app.feeds.layers[3].enabled,
-            "i" => app.feeds.inspect,
-            "Escape" => paused,
+            "Escape" => app.feeds.inspect,
             _ => false,
         };
-        let label = if item.key == "Escape" && paused {
-            "Esc Play "
-        } else {
-            item.label
-        };
+        let selected =
+            selected && !(app.feeds.inspect && item.key.chars().all(|c| c.is_ascii_digit()));
+        let label = item.label;
         let style = if selected {
             Style::default().fg(Color::Black).bg(Color::Cyan)
         } else {
@@ -140,7 +142,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect, paused: bool, help: bool
             height,
         );
         frame.render_widget(Clear, area);
-        frame.render_widget(Paragraph::new("Drag / swipe: rotate or pan\nClick / tap / Space: release effect\nScroll / +/-: zoom\n1-6: select effect; o/f/m: tornado/frost/meteor\n7/8/9/t: quakes / hazards / aircraft / satellites\ni: inspect markers (click without effects)\nArrows / hjkl: pan\ng: globe / flat map\nEsc: pause / resume   r: reset\n\nWater + fire = steam\nEMP + gas = electric filaments\nWater / frost + life = blooms\nTornado: swirls fire and gas\nFrost: quenches fire; Meteor: ignites land\n\nClick or press ? / Esc to close")
+        frame.render_widget(Paragraph::new("Drag / swipe: rotate or pan\nClick / tap / Space: select, or use chosen effect\nScroll / +/-: zoom\n1-9: select effect\ne/d/a/t: quakes / hazards / aircraft / satellites\nEsc / i: return to crosshair selection\nArrows / hjkl: pan\ng: globe / flat map\nr: reset\n\nWater + fire = steam\nEMP + gas = electric filaments\nWater / frost + life = blooms\nTornado: swirls fire and gas\nFrost: quenches fire; Meteor: ignites land\n\nClick or press ? / Esc to close")
             .wrap(Wrap { trim: true }).block(Block::default().borders(Borders::ALL).title(" Help "))
             .style(Style::default().fg(Color::Cyan).bg(Color::Black)), area);
     }
@@ -153,7 +155,7 @@ mod tests {
     fn all_controls_fit_and_hit_their_own_cells() {
         for width in [40, 55, 120, 240] {
             let (height, items) = layout(width);
-            assert_eq!(items.len(), 26);
+            assert_eq!(items.len(), 25);
             for item in items {
                 assert!(item.area.right() < width);
                 assert!(item.area.bottom() < height);

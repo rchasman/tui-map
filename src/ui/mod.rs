@@ -21,6 +21,10 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     render_in(frame, app, frame.area());
 }
 
+pub fn map_rows(app: &App, width: u16, height: u16) -> u16 {
+    height.saturating_sub(1 + feeds::height(app, width).min(height.saturating_sub(4)))
+}
+
 /// Render into a host-provided terminal region.
 pub fn render_in(frame: &mut Frame, app: &mut App, area: Rect) {
     // Split into map area and status bar
@@ -29,11 +33,13 @@ pub fn render_in(frame: &mut Frame, app: &mut App, area: Rect) {
         .constraints([
             Constraint::Min(3),    // Map
             Constraint::Length(1), // Status bar
+            Constraint::Length(feeds::height(app, area.width).min(area.height.saturating_sub(4))),
         ])
         .split(area);
 
     render_map(frame, app, chunks[0]);
     render_status_bar(frame, app, chunks[1]);
+    feeds::render_info(frame, app, chunks[2]);
 }
 
 fn render_map(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -307,6 +313,7 @@ fn render_map(frame: &mut Frame, app: &mut App, area: Rect) {
     let map_widget = MapWidget {
         layers,
         cursor_pos,
+        inspect: app.feeds.inspect,
         cursor_geo,
         cursor_blast_km,
         active_weapon: app.active_weapon,
@@ -338,6 +345,7 @@ struct FireRender {
 struct MapWidget<'a> {
     layers: MapLayers,
     cursor_pos: Option<(u16, u16)>,
+    inspect: bool,
     cursor_geo: Option<(f64, f64)>,
     cursor_blast_km: f64,
     active_weapon: WeaponType,
@@ -478,11 +486,12 @@ impl<'a> Widget for MapWidget<'a> {
             area, self.frame, buf);
 
         // Render cursor targeting reticle — color from active weapon
-        let reticle_color = weapon_color(self.active_weapon);
+        let reticle_color = if self.inspect { Color::White } else { weapon_color(self.active_weapon) };
         if let Some((cx, cy)) = self.cursor_pos {
             let center_x = area.x as i32 + cx as i32;
             let center_y = area.y as i32 + cy as i32;
 
+            if !self.inspect {
             if let Projection::Globe(ref globe) = self.projection {
                 if let Some((cursor_lon, cursor_lat)) = self.cursor_geo {
                     let radius_deg = self.cursor_blast_km / 111.0;
@@ -537,11 +546,13 @@ impl<'a> Widget for MapWidget<'a> {
                 }
             }
 
+            }
+
             // Center crosshair
             if center_x >= area.x as i32 && center_x < (area.x + area.width) as i32 &&
                center_y >= area.y as i32 && center_y < (area.y + area.height) as i32 {
                 buf[(center_x as u16, center_y as u16)]
-                    .set_char('✕')
+                    .set_char(if self.inspect { '+' } else { '✕' })
                     .set_fg(reticle_color);
             }
         }
@@ -589,8 +600,8 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         Span::styled(app.center_coords(), Style::default().fg(Color::Cyan)),
         Span::styled("| ", Style::default().fg(Color::DarkGray)),
         Span::styled(
-            format!("{} {}", app.active_weapon.symbol(), app.active_weapon.label()),
-            Style::default().fg(weapon_color(app.active_weapon)),
+            format!("{} {}", if app.feeds.inspect { "+" } else { app.active_weapon.symbol() }, if app.feeds.inspect { "CROSSHAIR" } else { app.active_weapon.label() }),
+            Style::default().fg(if app.feeds.inspect { Color::White } else { weapon_color(app.active_weapon) }),
         ),
         if app.casualties > 0 {
             Span::styled(

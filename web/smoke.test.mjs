@@ -8,13 +8,13 @@ await init({ module_or_path: await readFile(new URL('./pkg/tui_map_bg.wasm', imp
 test('WASM host renders, fires all effects, changes projection, and resets', () => {
   const app = new BrowserApp(120, 40);
   try {
-    assert.equal(JSON.parse(app.status()).weapon, 'WATER');
+    assert.equal(JSON.parse(app.status()).weapon, 'CROSSHAIR');
     const geometry = { type: 'FeatureCollection', features: [{ type: 'Feature', properties: {},
       geometry: { type: 'LineString', coordinates: [[-30, 0], [0, 40], [30, 0]] } }] };
     app.load_layer('coastline', 0, new TextEncoder().encode(JSON.stringify(geometry)));
     app.finish_loading();
     assert.equal(app.render().length, 120 * 40 * 3);
-    for (const [key, weapon] of [['1', 'WATER'], ['2', 'LIFE'], ['3', 'NUKE'], ['4', 'BIO'], ['5', 'EMP'], ['6', 'CHEM'], ['o', 'TORNADO'], ['f', 'FROST'], ['m', 'METEOR']]) {
+    for (const [key, weapon] of [['1', 'WATER'], ['2', 'LIFE'], ['3', 'NUKE'], ['4', 'BIO'], ['5', 'EMP'], ['6', 'CHEM'], ['7', 'TORNADO'], ['8', 'FROST'], ['9', 'METEOR']]) {
       app.command(key);
       for (let frame = 0; frame < 16; frame++) app.tick();
       const before = JSON.parse(app.status()).effects;
@@ -31,7 +31,7 @@ test('WASM host renders, fires all effects, changes projection, and resets', () 
     assert.equal(app.render().length, 55 * 44 * 3);
     app.command('r');
     const reset = JSON.parse(app.status());
-    assert.equal(reset.weapon, 'WATER');
+    assert.equal(reset.weapon, 'CROSSHAIR');
     assert.equal(reset.effects, 0);
     assert.equal(reset.fires, 0);
     assert.equal(reset.casualties, 0);
@@ -47,7 +47,7 @@ test('WASM loader rejects malformed data and unknown layer kinds', () => {
   } finally { app.free(); }
 });
 
-test('TUI menu clicks select effects without firing and control pause and help', () => {
+test('TUI menu clicks select effects without firing and Escape restores crosshair selection', () => {
   const app = new BrowserApp(55, 44);
   const click = text => {
     const cells = app.render();
@@ -66,23 +66,19 @@ test('TUI menu clicks select effects without firing and control pause and help',
     assert.equal(JSON.parse(app.status()).weapon, 'LIFE');
     click('[4 Bio]');
     assert.equal(JSON.parse(app.status()).weapon, 'BIO');
-    for (const [label, weapon] of [['o Tornado', 'TORNADO'], ['f Frost', 'FROST'], ['m Meteor', 'METEOR']]) {
+    for (const [label, weapon] of [['7 Tornado', 'TORNADO'], ['8 Frost', 'FROST'], ['9 Meteor', 'METEOR']]) {
       click(`[${label}]`);
       assert.equal(JSON.parse(app.status()).weapon, weapon);
     }
     assert.equal(JSON.parse(app.status()).effects, 0);
-    click('[Esc Pause]');
-    const frame = JSON.parse(app.status()).frame;
-    app.tick();
-    assert.equal(JSON.parse(app.status()).frame, frame);
     click('[? Help]');
     assert.equal(JSON.parse(app.status()).help, true);
     app.command('Escape');
     assert.equal(JSON.parse(app.status()).help, false);
-    assert.equal(JSON.parse(app.status()).paused, true);
-    app.command('Escape');
+    assert.equal(JSON.parse(app.status()).weapon, 'CROSSHAIR');
+    const frame=JSON.parse(app.status()).frame;
     app.tick();
-    assert.equal(JSON.parse(app.status()).frame, frame + 1);
+    assert.equal(JSON.parse(app.status()).frame,frame+1);
   } finally { app.free(); }
 });
 
@@ -90,7 +86,7 @@ test('live layers ingest, inspect, expire and survive reset without duplicate re
   const app=new BrowserApp(120,50);const now=1788800000;
   try {
     assert.deepEqual(JSON.parse(app.feed_requests(now)),[]);
-    app.command('7');app.command('8');app.command('9');app.command('t');
+    app.command('e');app.command('d');app.command('a');app.command('t');
     const requests=JSON.parse(app.feed_requests(now));assert.equal(requests.length,4);
     assert.deepEqual(JSON.parse(app.feed_requests(now+1)),[]);
     const quake=JSON.stringify({type:'FeatureCollection',features:[{id:'q',geometry:{type:'Point',coordinates:[0,20,10]},properties:{mag:4.5,place:'Test quake',time:now*1000}}]});
@@ -102,14 +98,48 @@ test('live layers ingest, inspect, expire and survive reset without duplicate re
     const status=JSON.parse(app.status());
     assert.equal(status.feeds[0].state,'LIVE');assert.equal(status.feeds[1].state,'EMPTY');assert.equal(status.feeds[2].state,'OFFLINE');
     app.command('i');app.render();
-    const mapRows=JSON.parse(app.status()).mapRows;
-    app.pointer('fire',60,Math.floor((mapRows-1)/2));
+    const mapRows=JSON.parse(app.status()).mapAreaRows;
+    app.pointer('fire',60,Math.floor(mapRows/2));
     assert.equal(JSON.parse(app.status()).effects,0);
     assert.ok(JSON.parse(app.status()).selected);
     assert.equal(app.render().length,120*50*3);
     app.command('r');assert.equal(JSON.parse(app.status()).feeds[0].count,1);
     assert.deepEqual(JSON.parse(app.feed_requests(now+2)),[]);
-    app.command('7');assert.equal(JSON.parse(app.status()).feeds[0].state,'OFF');
+    app.command('e');assert.equal(JSON.parse(app.status()).feeds[0].state,'OFF');
     app.resize(40,16);assert.equal(app.render().length,40*16*3);
+  } finally {app.free();}
+});
+
+test('crosshair is default, every live layer shares Labels, and details stay outside the map',()=>{
+  const app=new BrowserApp(160,60),now=1788739200;
+  const text=()=>Array.from(app.render()).filter((_,i)=>i%3===0).map(c=>String.fromCodePoint(c)).join('');
+  try {
+    app.finish_loading();app.command('g');app.pointer('fire',80,20);
+    assert.equal(JSON.parse(app.status()).effects,0);
+    assert.equal(JSON.parse(app.status()).weapon,'CROSSHAIR');
+    for(const key of ['e','d','a','t'])app.command(key);
+    const payloads={
+      quakes:{type:'FeatureCollection',features:[{id:'quake-label',geometry:{type:'Point',coordinates:[-40,20,10]},properties:{mag:4.5,place:'QUAKE LABEL',time:now*1000}}]},
+      hazards:{events:[{id:'hazard-label',title:'HAZARD LABEL',categories:[{title:'Wildfires'}],geometry:[{type:'Point',coordinates:[-10,-10],date:'2026-09-07T00:00:00Z'}]}]},
+      aircraft:{ac:[{hex:'abcd',flight:'AIR LABEL',lat:30,lon:40,seen_pos:0}]},
+      satellites:[{OBJECT_NAME:'SAT LABEL',OBJECT_ID:'1998-067A',EPOCH:'2026-09-07T00:00:00',MEAN_MOTION:15.5,ECCENTRICITY:0.0005,INCLINATION:0,RA_OF_ASC_NODE:0,ARG_OF_PERICENTER:0,MEAN_ANOMALY:0,EPHEMERIS_TYPE:0,CLASSIFICATION_TYPE:'U',NORAD_CAT_ID:25544,ELEMENT_SET_NO:999,REV_AT_EPOCH:100,BSTAR:0.0001,MEAN_MOTION_DOT:0,MEAN_MOTION_DDOT:0}]
+    };
+    for(const request of JSON.parse(app.feed_requests(now)))app.feed_complete(request.id,JSON.stringify(payloads[request.kind]),'',now);
+    const before=text(),mapEnd=JSON.parse(app.status()).mapAreaRows*160;
+    for(const label of ['QUAKE LABEL','HAZARD LABEL','AIR LABEL','SAT LABEL'])assert.ok(before.slice(0,mapEnd).includes(label),`missing ${label}`);
+    assert.ok(!before.slice(0,mapEnd).includes('click marker'));
+    app.command('L');
+    for(const label of ['QUAKE LABEL','HAZARD LABEL','AIR LABEL','SAT LABEL'])assert.ok(!text().slice(0,mapEnd).includes(label));
+    app.command('L');
+    const index=text().indexOf('QUAKE LABEL');app.pointer('fire',index%160,Math.floor(index/160));
+    assert.deepEqual(JSON.parse(app.status()).selected,['quakes','quake-label']);
+    const rendered=text(),end=JSON.parse(app.status()).mapAreaRows*160;
+    assert.ok(rendered.indexOf('Magnitude 4.5')>=end);
+    assert.equal(JSON.parse(app.status()).effects,0);
+    app.command('1');assert.equal(JSON.parse(app.status()).inspect,false);
+    app.command('Escape');assert.equal(JSON.parse(app.status()).weapon,'CROSSHAIR');
+    app.pointer('fire',80,20);assert.equal(JSON.parse(app.status()).effects,0);
+    app.command('i');assert.equal(JSON.parse(app.status()).weapon,'CROSSHAIR');
+    app.command('i');assert.equal(JSON.parse(app.status()).inspect,true);
   } finally {app.free();}
 });

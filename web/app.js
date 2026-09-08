@@ -30,6 +30,7 @@ function resize(){
 function updateStatus(next){
   canvas.dataset.feeds=JSON.stringify(next.feeds);
   canvas.dataset.inspect=String(next.inspect);
+  canvas.style.cursor=next.inspect ? 'crosshair' : 'pointer';
   canvas.dataset.selected=JSON.stringify(next.selected);
   for(const key of ['frame','effects','projection','weapon','paused','help','mapRows'])canvas.dataset[key]=String(next[key]);
 }
@@ -83,7 +84,7 @@ canvas.addEventListener('wheel',event=>{event.preventDefault();if(performance.no
 function command(key){if(ready)send({type:'command',key});}
 document.addEventListener('keydown',event=>{
   if(event.ctrlKey||event.metaKey||event.altKey)return;
-  if(['1','2','3','4','5','6','o','f','m','7','8','9','t','i','g','b','s','c','y','L','p','h','j','k','l','r','0',' ','+','=','-','ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Escape','?'].includes(event.key)){
+  if(['1','2','3','4','5','6','7','8','9','e','d','a','t','i','g','b','s','c','y','L','p','h','j','k','l','r','0',' ','+','=','-','ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Escape','?'].includes(event.key)){
     event.preventDefault();command(event.key);
   }
 });

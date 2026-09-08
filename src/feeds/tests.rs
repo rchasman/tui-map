@@ -15,9 +15,9 @@ fn load(feeds: &mut Feeds, key: &str, body: &str, now: f64) {
 fn disabled_feeds_do_not_fetch_and_toggles_preserve_rate_limits() {
     let mut f = Feeds::default();
     assert!(f.requests(NOW, (0., 0.)).is_empty());
-    load(&mut f, "7", &quake(10.), NOW);
-    f.command("7");
-    f.command("7");
+    load(&mut f, "e", &quake(10.), NOW);
+    f.command("e");
+    f.command("e");
     assert!(f.requests(NOW + 10., (0., 0.)).is_empty());
     assert_eq!(f.requests(NOW + 60., (0., 0.)).len(), 1);
     assert!(f.requests(NOW + 61., (0., 0.)).is_empty());
@@ -25,7 +25,7 @@ fn disabled_feeds_do_not_fetch_and_toggles_preserve_rate_limits() {
 #[test]
 fn malformed_refresh_preserves_last_good_snapshot_until_expiry() {
     let mut f = Feeds::default();
-    load(&mut f, "7", &quake(10.), NOW);
+    load(&mut f, "e", &quake(10.), NOW);
     let r = f.requests(NOW + 60., (0., 0.)).pop().unwrap();
     f.complete(r.id, Ok(&quake(400.)), NOW + 60.);
     assert_eq!(f.layers[0].state(NOW + 60.), "STALE");
@@ -37,9 +37,9 @@ fn malformed_refresh_preserves_last_good_snapshot_until_expiry() {
 #[test]
 fn valid_empty_and_offline_are_distinct() {
     let mut f = Feeds::default();
-    load(&mut f, "8", r#"{"events":[]}"#, NOW);
+    load(&mut f, "d", r#"{"events":[]}"#, NOW);
     assert_eq!(f.layers[1].state(NOW), "EMPTY");
-    f.command("9");
+    f.command("a");
     let r = f.requests(NOW, (0., 0.)).pop().unwrap();
     f.complete(r.id, Err("HTTP 429".into()), NOW);
     assert_eq!(f.layers[2].state(NOW), "OFFLINE");
@@ -48,7 +48,7 @@ fn valid_empty_and_offline_are_distinct() {
 #[test]
 fn aircraft_requests_are_bounded_and_trails_keep_only_recent_history() {
     let mut f = Feeds::default();
-    load(&mut f, "9", &aircraft(1.), NOW);
+    load(&mut f, "a", &aircraft(1.), NOW);
     let r = f.requests(NOW + 15., (541., -33.9)).pop().unwrap();
     assert_eq!(r.url, "https://api.adsb.lol/v2/lat/-34/lon/-179/dist/250");
     f.complete(r.id, Ok(&aircraft(2.)), NOW + 15.);
@@ -60,7 +60,7 @@ fn aircraft_requests_are_bounded_and_trails_keep_only_recent_history() {
 #[test]
 fn late_or_duplicate_response_cannot_overwrite_current_snapshot() {
     let mut f = Feeds::default();
-    load(&mut f, "7", &quake(10.), NOW);
+    load(&mut f, "e", &quake(10.), NOW);
     f.complete(1, Ok(&quake(20.)), NOW + 1.);
     assert_eq!(f.layers[0].markers[0].lon, 10.);
 }
@@ -90,12 +90,12 @@ fn omm_propagates_and_expired_elements_are_rejected() {
 fn selection_culls_back_of_globe_and_disabled_layers() {
     use crate::map::{GlobeViewport, Projection};
     let mut f = Feeds::default();
-    load(&mut f, "7", &quake(0.), NOW);
+    load(&mut f, "e", &quake(0.), NOW);
     let p = Projection::Globe(GlobeViewport::new(0., 20., 40., 100, 100));
     let (x, y) = p.project_point(0., 20.).unwrap();
     f.select(&p, (x / 2 + 1) as u16, (y / 4 + 1) as u16);
     assert!(f.selected.is_some());
-    f.command("7");
+    f.command("e");
     assert!(f.selected.is_none());
 }
 

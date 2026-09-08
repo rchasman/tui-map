@@ -30,9 +30,9 @@ impl Kind {
     }
     pub fn key(self) -> &'static str {
         match self {
-            Self::Quakes => "7",
-            Self::Hazards => "8",
-            Self::Aircraft => "9",
+            Self::Quakes => "e",
+            Self::Hazards => "d",
+            Self::Aircraft => "a",
             Self::Satellites => "t",
         }
     }
@@ -165,6 +165,7 @@ pub struct Request {
 pub struct Feeds {
     pub layers: [Layer; 4],
     pub inspect: bool,
+    pub label_hits: Vec<(u16, u16, u16, Kind, String)>,
     pub selected: Option<(Kind, String)>,
     pub now: f64,
     serial: u32,
@@ -174,7 +175,8 @@ impl Default for Feeds {
     fn default() -> Self {
         Self {
             layers: Kind::ALL.map(Layer::new),
-            inspect: false,
+            inspect: true,
+            label_hits: Vec::new(),
             selected: None,
             now: 0.,
             serial: 0,
@@ -184,8 +186,9 @@ impl Default for Feeds {
 }
 impl Feeds {
     pub fn command(&mut self, key: &str) -> bool {
-        if key == "i" {
-            self.inspect = !self.inspect;
+        if matches!(key, "i" | "Escape") {
+            self.inspect = true;
+            self.selected = None;
             return true;
         }
         if let Some(kind) = Kind::ALL.into_iter().find(|k| k.key() == key) {
@@ -345,6 +348,15 @@ impl Feeds {
         }
     }
     pub fn select(&mut self, projection: &crate::map::Projection, col: u16, row: u16) {
+        if let Some((_, _, _, kind, id)) = self.label_hits.iter().find(|(x, y, width, kind, _)| {
+            row == *y
+                && col >= *x
+                && col < x.saturating_add(*width)
+                && self.layers[kind.index()].visible(self.now)
+        }) {
+            self.selected = Some((*kind, id.clone()));
+            return;
+        }
         let mut best = 10;
         self.selected = None;
         for layer in &self.layers {

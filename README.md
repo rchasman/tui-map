@@ -11,7 +11,7 @@ A canvas paints the Ratatui cell buffer at up to 30 FPS. Drag to rotate or pan,
 scroll or use the zoom buttons, and click to release any of the nine effects.
 Water is selected on startup and after reset.
 The full-screen terminal includes clickable Ratatui controls for effects, layers,
-projection switching, pause, reset, and help (`?`). Controls wrap to fit narrow
+projection switching, crosshair selection, reset, and help (`?`). Controls wrap to fit narrow
 screens; the browser only hosts the canvas and forwards input.
 
 Requires Node.js 24+ and rustup. The repo pins Rust 1.98.1 and wasm-pack 0.15.0:
@@ -65,8 +65,9 @@ cargo run --release
 - `+`/`=` - Zoom in
 - `-` - Zoom out
 - `r`/`0` - Reset view
-- `q`/`Esc` - Quit
-- `o` / `f` / `m` - Select Tornado / Frost / Meteor (terminal and browser)
+- `q` - Quit (terminal)
+- `Esc` / `i` - Return to crosshair selection
+- `7` / `8` / `9` - Select Tornado / Frost / Meteor (terminal and browser)
 
 ## Live data layers
 
@@ -74,16 +75,21 @@ Toggle layers using the browser controls or the same keys in the terminal:
 
 | Key | Layer | Coverage / refresh |
 | --- | --- | --- |
-| `7` | Earthquakes — USGS | Past 24 hours, every minute |
-| `8` | Natural hazards — NASA EONET | Up to 200 open events from the past 30 days, every 15 minutes |
-| `9` | Aircraft — adsb.lol | Observed aircraft within 250 nautical miles of the viewport center, every 15 seconds |
+| `e` | Earthquakes — USGS | Past 24 hours, every minute |
+| `d` | Natural hazards — NASA EONET | Up to 200 open events from the past 30 days, every 15 minutes |
+| `a` | Aircraft — adsb.lol | Observed aircraft within 250 nautical miles of the viewport center, every 15 seconds |
 | `t` | Satellites — CelesTrak | Stations catalog (including ISS), orbital elements every 2 hours; SGP4 positions every second |
-| `i` | Inspect | Click a marker for source, observation time, coordinates and details |
+| `i` | Crosshair | Click a marker for source, observation time, coordinates and details |
 
-All feeds start off and require no API keys. In inspect mode, browser clicks and
-Space select markers instead of releasing effects. Terminal left/right clicks
-and Space also select markers. Turn inspect off to resume effects. Pan and zoom
-continue to work. Reset preserves feed settings, snapshots and polling deadlines.
+All feeds start off and require no API keys. The default crosshair selects markers;
+clicking does not release an effect until you choose one with `1`–`9`. Press `Esc` (or `i`)
+to return to crosshair selection. Browser clicks and Space select markers;
+terminal left/right clicks and Space do the same. Reset returns to the crosshair
+while preserving feed settings, snapshots and polling deadlines. Feed status and
+selected marker details appear below the map, never over the globe. The existing
+`L` Labels control covers cities and all four live layers, with labels on by
+default. Crowded labels are placed around their markers without overlapping
+other labels; zoom in to reveal more. Clicking a label also selects its marker.
 
 Earthquakes have magnitude-sized, age-dimmed markers. Aircraft have short observed
 trails and heading ticks. Satellite tracks cover approximately 30 minutes either
@@ -92,8 +98,7 @@ live telemetry. Elements older than seven days are rejected. Hazard markers use
 the latest supported event location, not the affected area's extent.
 
 The overlay shows loading, live/estimated, partial, empty, stale, expired and
-offline states plus time since the last successful fetch. Inspect mode also shows
-source errors when no marker is selected. Requests time out, retry with backoff,
+offline states plus time since the last successful fetch. Requests time out, retry with backoff,
 and retain the last good snapshot on failure. Aircraft expire after two minutes;
 other snapshots expire after one day. Disabled layers stop scheduling requests.
 Snapshots are cached in memory for the session; the aircraft proxy additionally
@@ -119,21 +124,25 @@ On the globe, Nuke, Bio, Chem, Life, Tornado, Frost, and Meteor occupy volumes a
 Their height rotates with Earth: raised tops can remain visible beyond the horizon
 while the planet hides their bases. Particle trails use the same depth test.
 
-- **Water:** a quick splash settles into six seconds of flowing ripples and broken foam.
+- **Water:** expanding swells settle into six seconds of flowing ripples. Overlapping
+  splashes share one geographic surface: crests reinforce, troughs cancel, and
+  opposing crests break into patchy foam. Submerged pool edges disappear instead
+  of drawing rings through neighboring water. This is a damped wave model; it
+  does not simulate terrain runoff or coast reflections.
 - **Life:** uneven shoots branch into leaves and buds, then settle over seven seconds.
 - **EMP:** broken, uneven arcs and intermittent branching sparks replace uniform concentric bands.
 - **Bio:** low drifting wisps spread through continuous, porous plumes.
 - **Chem:** heavier, irregular plumes leave attached rivulets and turbulent pockets.
 - **Nuke:** impact-specific billows rise at uneven heights and lean with the plume.
-- **Tornado (`o`):** a rotating funnel lifts spiraling ribbons above a debris skirt.
+- **Tornado (`7`):** a rotating funnel lifts spiraling ribbons above a debris skirt.
   Its winds carry existing fires and Bio/Chem clouds around the center, including
   across the date line. A sustained hollow core compresses gas into a bright rim.
   Overlapping winds add independently of launch order.
   Wind creates no new fire or fallout; water and frost still quench transported fire.
-- **Frost (`f`):** branching ice crystals spread across the surface. The advancing
+- **Frost (`8`):** branching ice crystals spread across the surface. The advancing
   cold front quenches fire into steam and leaves a brief cooling field, including
   against new meteor fires. Frost + Life produces blooms like Water + Life.
-- **Meteor (`m`):** an immediate impact ejects fiery ballistic trails above a
+- **Meteor (`9`):** an immediate impact ejects fiery ballistic trails above a
   cooling crater. It damages cities and ignites land without radioactive fallout.
   Water and frost suppress its fire and thermal glow.
 - **Water + fire:** the advancing wave extinguishes heat and leaves drifting steam
@@ -145,13 +154,14 @@ while the planet hides their bases. Particle trails use the same depth test.
 - **Shockwave + cloud:** passing fronts hollow out fog and brighten its compressed rim;
   density returns as the disturbance settles. Crossing waves continue independently.
 
-Try all six combinations in the interactive lab:
+Try the interaction scenes in the interactive lab:
 
 ```bash
 cargo run --release --example effect_lab
 ```
 
-Use `1`–`6` for combinations or `7` for the standalone nuke, `Space` to pause,
+Use `1`–`6` for combinations, `7` for the standalone nuke, or `8`–`9` for
+intersecting water and staggered splashes. Use `Space` to pause,
 `r` to restart, and `q` to quit. The nuke grows from a brief white-hot flash into
 a rounded mushroom cap, then cools into rolling smoke over 90 animation frames.
 To export an animated preview with a timeline and scene selector:

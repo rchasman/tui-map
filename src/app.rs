@@ -387,6 +387,8 @@ impl App {
     /// Select active weapon
     pub fn select_weapon(&mut self, weapon: WeaponType) {
         self.active_weapon = weapon;
+        self.feeds.inspect = false;
+        self.feeds.selected = None;
     }
 
     /// Launch the active weapon at the given screen position

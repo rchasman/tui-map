@@ -34,7 +34,7 @@ impl BrowserApp {
             (height - ui::menu::layout(width).0) as usize,
         );
         app.frame = 30;
-        app.map_renderer.settings.show_labels = false;
+        app.map_renderer.settings.show_labels = true;
         let terminal = Terminal::new(TestBackend::new(width, height)).map_err(js_error)?;
         Ok(Self {
             app,
@@ -113,6 +113,10 @@ impl BrowserApp {
             }
             return;
         }
+        if row >= ui::map_rows(&self.app, self.width, map_height) {
+            self.app.mouse_pos = None;
+            return;
+        }
         if kind == "start" {
             self.map_drag = true;
         }
@@ -136,6 +140,11 @@ impl BrowserApp {
     }
 
     pub fn command(&mut self, key: &str) {
+        if key == "Escape" {
+            self.help = false;
+            self.app.feeds.command(key);
+            return;
+        }
         if self.help {
             if matches!(key, "?" | "Escape") {
                 self.help = false;
@@ -147,16 +156,15 @@ impl BrowserApp {
         }
         match key {
             "?" => self.help = true,
-            "Escape" => self.paused = !self.paused,
             "1" => self.app.select_weapon(WeaponType::Water),
             "2" => self.app.select_weapon(WeaponType::Life),
             "3" => self.app.select_weapon(WeaponType::Nuke),
             "4" => self.app.select_weapon(WeaponType::Bio),
             "5" => self.app.select_weapon(WeaponType::Emp),
             "6" => self.app.select_weapon(WeaponType::Chem),
-            "o" => self.app.select_weapon(WeaponType::Tornado),
-            "f" => self.app.select_weapon(WeaponType::Frost),
-            "m" => self.app.select_weapon(WeaponType::Meteor),
+            "7" => self.app.select_weapon(WeaponType::Tornado),
+            "8" => self.app.select_weapon(WeaponType::Frost),
+            "9" => self.app.select_weapon(WeaponType::Meteor),
             "g" => self.app.toggle_projection(),
             "b" => self.app.map_renderer.toggle_borders(),
             "s" => self.app.map_renderer.toggle_states(),
@@ -199,6 +207,8 @@ impl BrowserApp {
             (self.height - ui::menu::layout(self.width).0) as usize,
         );
         self.app.feeds = feeds;
+        self.app.feeds.inspect = true;
+        self.app.feeds.selected = None;
         self.app.frame = 30;
         self.paused = false;
         self.map_drag = false;
@@ -220,7 +230,6 @@ impl BrowserApp {
                     frame,
                     &self.app,
                     ratatui::layout::Rect::new(0, map_height, self.width, menu_height),
-                    self.paused,
                     self.help,
                 );
             })
@@ -262,11 +271,11 @@ impl BrowserApp {
     }
 
     pub fn status(&self) -> String {
-        serde_json::json!({"feeds":self.app.feeds.status(),"inspect":self.app.feeds.inspect,"selected":self.app.feeds.selected,"weapon":self.app.active_weapon.label(),
+        serde_json::json!({"feeds":self.app.feeds.status(),"inspect":self.app.feeds.inspect,"selected":self.app.feeds.selected,"weapon":if self.app.feeds.inspect {"CROSSHAIR"} else {self.app.active_weapon.label()},
             "projection":if matches!(self.app.projection,Projection::Globe(_)){"Globe"}else{"Mercator"},
             "zoom":self.app.zoom_level(),"center":self.app.center_coords(),
             "fires":self.app.fires.len(),"effects":self.app.explosions.len(),
-            "casualties":self.app.casualties,"frame":self.app.frame, "paused":self.paused, "help":self.help, "mapRows":self.height - ui::menu::layout(self.width).0}).to_string()
+            "casualties":self.app.casualties,"frame":self.app.frame, "paused":self.paused, "help":self.help, "mapRows":self.height - ui::menu::layout(self.width).0,"mapAreaRows":ui::map_rows(&self.app,self.width,self.height - ui::menu::layout(self.width).0)}).to_string()
     }
 }
 
