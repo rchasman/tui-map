@@ -206,38 +206,74 @@ impl Interactions {
     /// Temporary cloud displacement and ionization at this world point.
     /// Fixed-point pressure and charge sums are independent of field order.
     pub fn cloud_response(&self, point: DVec3) -> (f32, f32) {
-        let mut pressure = 0i64;
-        let mut charge = 0i64;
-        for field in &self.fields {
-            let t = field.progress();
-            if t <= 0.0 || t >= 1.4 {
-                continue;
-            }
-            let front = field.front_km();
-            let width = (field.radius_km * 0.22).max(1.0);
-            if field.center.dot(point) < ((front + width * 3.0) / EARTH_KM).cos() {
-                continue;
-            }
-            let d = field.distance(point);
-            let recovery = if t > 0.8 {
+        resolve_cloud_response(self.fields.iter().filter_map(CloudField::new), point)
+    }
+
+    /// Snapshot per-field wave geometry once for all cloud cells in this render.
+    pub(crate) fn prepare_cloud_response(&self) -> impl Fn(DVec3) -> (f32, f32) {
+        let fields: Vec<_> = self.fields.iter().filter_map(CloudField::new).collect();
+        move |point| resolve_cloud_response(fields.iter().copied(), point)
+    }
+}
+
+#[derive(Clone, Copy)]
+struct CloudField {
+    center: DVec3,
+    front: f64,
+    width: f64,
+    cutoff: f64,
+    recovery: f64,
+    charged: bool,
+}
+
+impl CloudField {
+    fn new(field: &Field) -> Option<Self> {
+        let t = field.progress();
+        if t <= 0.0 || t >= 1.4 {
+            return None;
+        }
+        let front = field.front_km();
+        let width = (field.radius_km * 0.22).max(1.0);
+        Some(Self {
+            center: field.center,
+            front,
+            width,
+            cutoff: ((front + width * 3.0) / EARTH_KM).cos(),
+            recovery: if t > 0.8 {
                 ((1.4 - t) / 0.6).max(0.0)
             } else {
                 1.0
-            };
-            let rim = (1.0 - ((d - front) / width).abs()).max(0.0);
-            let hollow = if d < front { (1.0 - rim) * 0.72 } else { 0.0 };
-            pressure += (recovery * (rim * 1.8 - hollow) * 65536.0) as i64;
-            if field.weapon == WeaponType::Emp {
-                // Charge lingers behind the leading edge, then decays smoothly.
-                let contact = (1.0 - ((d - front) / (width * 2.5)).abs()).max(0.0);
-                charge += (contact * recovery * 65536.0) as i64;
-            }
-        }
-        (
-            (1.0 + pressure as f32 / 65536.0).clamp(0.08, 3.0),
-            (charge as f32 / 65536.0).min(1.0),
-        )
+            },
+            charged: field.weapon == WeaponType::Emp,
+        })
     }
+}
+
+fn resolve_cloud_response(fields: impl Iterator<Item = CloudField>, point: DVec3) -> (f32, f32) {
+    let mut pressure = 0i64;
+    let mut charge = 0i64;
+    for field in fields {
+        let dot = field.center.dot(point);
+        if dot < field.cutoff {
+            continue;
+        }
+        let d = dot.clamp(-1.0, 1.0).acos() * EARTH_KM;
+        let rim = (1.0 - ((d - field.front) / field.width).abs()).max(0.0);
+        let hollow = if d < field.front {
+            (1.0 - rim) * 0.72
+        } else {
+            0.0
+        };
+        pressure += (field.recovery * (rim * 1.8 - hollow) * 65536.0) as i64;
+        if field.charged {
+            let contact = (1.0 - ((d - field.front) / (field.width * 2.5)).abs()).max(0.0);
+            charge += (contact * field.recovery * 65536.0) as i64;
+        }
+    }
+    (
+        (1.0 + pressure as f32 / 65536.0).clamp(0.08, 3.0),
+        (charge as f32 / 65536.0).min(1.0),
+    )
 }
 
 fn emit(
@@ -408,6 +444,28 @@ mod tests {
             world.update(&mut Vec::new());
         }
         assert_eq!(world.cloud_response(rim), (1.0, 0.0));
+    }
+
+    #[test]
+    fn prepared_cloud_response_matches_scalar_through_field_lifetimes() {
+        let mut world = Interactions::default();
+        for weapon in [WeaponType::Emp, WeaponType::Water, WeaponType::Life] {
+            world.launch(&pulse(weapon, 0));
+        }
+        for age in [0, 1, 15, 30, 45, 90, 180] {
+            for field in &mut world.fields {
+                field.age = age;
+            }
+            let prepared = world.prepare_cloud_response();
+            for lat in [-88.0, -3.0, 0.0, 3.0, 88.0] {
+                for lon in -180..180 {
+                    let point = lonlat_to_vec3(lon as f64, lat);
+                    assert_eq!(prepared(point), world.cloud_response(point));
+                }
+            }
+        }
+        world.fields.clear();
+        assert_eq!(world.prepare_cloud_response()(DVec3::X), (1.0, 0.0));
     }
 
     #[test]

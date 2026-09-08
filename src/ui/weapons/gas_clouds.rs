@@ -105,6 +105,7 @@ pub fn render_interacting(
         return;
     }
     let shapes: Vec<_> = clouds.iter().map(|c| CloudShape::new(c, frame)).collect();
+    let cloud_response = interactions.prepare_cloud_response();
     for row in 0..area.height {
         for col in 0..area.width {
             let Some((lon, lat)) = projection.unproject(col as i32 * 2, row as i32 * 4) else {
@@ -124,7 +125,7 @@ pub fn render_interacting(
             if bio + chem == 0 {
                 continue;
             }
-            let (displacement, electric) = interactions.cloud_response(point);
+            let (displacement, electric) = cloud_response(point);
             let bio = bio as f32 / 65536.0 * displacement;
             let chem = chem as f32 / 65536.0 * displacement;
             density_buf[row as usize * area.width as usize + col as usize] = (bio, chem);
