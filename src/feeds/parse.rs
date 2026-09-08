@@ -18,6 +18,16 @@ pub(super) fn snapshot(kind: Kind, text: &str, now: f64) -> Result<Snapshot, Str
     if rows.len() > 20000 {
         return Err("Too many feed records".into());
     }
+    // ADS-B seen_pos is relative to the provider snapshot, which may have spent
+    // time in a proxy cache. Never re-date old positions to the response time.
+    let observed_at = if kind == Kind::Aircraft {
+        number(&value["now"])
+            .map(|t| t / 1000.)
+            .filter(|t| *t <= now + 300.)
+            .unwrap_or(now)
+    } else {
+        now
+    };
     let mut markers = vec![];
     let mut orbits = vec![];
     let mut rejected = 0;
@@ -43,7 +53,7 @@ pub(super) fn snapshot(kind: Kind, text: &str, now: f64) -> Result<Snapshot, Str
             } else {
                 rejected += 1;
             }
-        } else if let Some(marker) = marker(kind, row, now) {
+        } else if let Some(marker) = marker(kind, row, observed_at) {
             markers.push(marker);
         } else {
             rejected += 1;

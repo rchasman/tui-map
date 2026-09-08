@@ -25,7 +25,9 @@ npm run dev:web
 ```
 
 Open `http://localhost:4173`. Rebuild after changing Rust or browser sources.
-The static bundle is generated in `web/dist`; no application server is required.
+The browser bundle is generated in `web/dist`. The aircraft layer uses a small
+Node endpoint under `api/aircraft`; `npm run dev:web` serves it locally and Vercel
+runs it as a function. The other feeds are fetched directly from their providers.
 Natural Earth coastlines and cities load first, followed by higher-resolution
 coastlines, land, borders, states, and US counties. The build compacts local
 Natural Earth assets when available and otherwise downloads version 5.1.2.
@@ -65,6 +67,48 @@ cargo run --release
 - `-` - Zoom out
 - `r`/`0` - Reset view
 - `q`/`Esc` - Quit
+
+## Live data layers
+
+Toggle layers using the browser controls or the same keys in the terminal:
+
+| Key | Layer | Coverage / refresh |
+| --- | --- | --- |
+| `7` | Earthquakes — USGS | Past 24 hours, every minute |
+| `8` | Natural hazards — NASA EONET | Up to 200 open events from the past 30 days, every 15 minutes |
+| `9` | Aircraft — adsb.lol | Observed aircraft within 250 nautical miles of the viewport center, every 15 seconds |
+| `t` | Satellites — CelesTrak | Stations catalog (including ISS), orbital elements every 2 hours; SGP4 positions every second |
+| `i` | Inspect | Click a marker for source, observation time, coordinates and details |
+
+All feeds start off and require no API keys. In inspect mode, browser clicks and
+Space select markers instead of releasing effects. Terminal left/right clicks
+and Space also select markers. Turn inspect off to resume effects. Pan and zoom
+continue to work. Reset preserves feed settings, snapshots and polling deadlines.
+
+Earthquakes have magnitude-sized, age-dimmed markers. Aircraft have short observed
+trails and heading ticks. Satellite tracks cover approximately 30 minutes either
+side of the current time; positions are **estimates from orbital elements**, not
+live telemetry. Elements older than seven days are rejected. Hazard markers use
+the latest supported event location, not the affected area's extent.
+
+The overlay shows loading, live/estimated, partial, empty, stale, expired and
+offline states plus time since the last successful fetch. Inspect mode also shows
+source errors when no marker is selected. Requests time out, retry with backoff,
+and retain the last good snapshot on failure. Aircraft expire after two minutes;
+other snapshots expire after one day. Disabled layers stop scheduling requests.
+Snapshots are cached in memory for the session; the aircraft proxy additionally
+coalesces requests and caches responses for 15 seconds. Coverage is provider-
+dependent: a blank region does not establish that no aircraft or hazards exist.
+
+Source attribution and API documentation:
+
+- [USGS Earthquake GeoJSON](https://earthquake.usgs.gov/earthquakes/feed/v1.0/geojson.php): data courtesy of the U.S. Geological Survey.
+- [NASA EONET](https://eonet.gsfc.nasa.gov/docs/v3): NASA Earth Observatory Natural Event Tracker; individual event source links are preserved.
+- [adsb.lol](https://www.adsb.lol/docs/open-data/api/): © adsb.lol contributors, [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/).
+- [CelesTrak](https://celestrak.org/NORAD/documentation/gp-data-formats.php): CelesTrak / Dr. T. S. Kelso, using GP JSON and the Rust `sgp4` propagator.
+
+The feed integrations are independently implemented; no Godseye application code
+or bundled datasets are copied. Third-party data retains its own terms.
 
 ## Effect interactions
 

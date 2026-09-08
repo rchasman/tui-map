@@ -1,5 +1,6 @@
 pub mod weapons;
 pub mod menu;
+mod feeds;
 
 use crate::app::{App, WeaponType};
 use crate::hash::hash3;
@@ -311,6 +312,7 @@ fn render_map(frame: &mut Frame, app: &mut App, area: Rect) {
         projection,
     };
     frame.render_widget(map_widget, inner);
+    feeds::render(frame, app, inner);
 }
 
 /// A fire cell to render

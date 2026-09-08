@@ -1,5 +1,7 @@
+import {createFeedTransport} from './feeds.mjs';
 import init, { BrowserApp } from './pkg/tui_map.js';
 
+let transport;
 let engine, ready=false, paused=false, last=0, accumulator=0;
 const STEP=1000/30;
 
@@ -21,6 +23,8 @@ self.onmessage=async ({data})=>{
     if(data.type==='init'){
       await init();
       engine=new BrowserApp(data.cols,data.rows);
+      transport=createFeedTransport(engine);
+      setInterval(()=>{if(ready)transport.tick();},1000);
       const response=await fetch(new URL('./data/manifest.json',import.meta.url));
       if(!response.ok) throw Error('The map manifest could not be loaded. Please retry.');
       const manifest=await response.json();
@@ -35,7 +39,7 @@ self.onmessage=async ({data})=>{
     if(!engine)return;
     if(data.type==='resize'){engine.resize(data.cols,data.rows);return;}
     if(data.type==='pause'){paused=data.paused;last=0;accumulator=0;return;}
-    if(data.type==='command'){engine.command(data.key);return;}
+    if(data.type==='command'){engine.command(data.key);transport.tick();return;}
     if(data.type==='pointer'){engine.pointer(data.kind,data.col,data.row);return;}
     if(data.type==='frame' && ready){
       if(last)accumulator+=Math.min(data.now-last,100);

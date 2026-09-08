@@ -98,3 +98,11 @@ fn selection_culls_back_of_globe_and_disabled_layers() {
     f.command("7");
     assert!(f.selected.is_none());
 }
+
+#[test]
+fn aircraft_cache_does_not_refresh_observation_time() {
+    let mut value: Value = serde_json::from_str(&aircraft(1.)).unwrap();
+    value["now"] = serde_json::json!((NOW - 15.) * 1000.);
+    let (markers, _, _) = parse::snapshot(Kind::Aircraft, &value.to_string(), NOW).unwrap();
+    assert_eq!(markers[0].observed, NOW - 16.);
+}

@@ -5,9 +5,10 @@ import path from 'node:path';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const dist = path.join(root, 'web/dist');
 await mkdir(path.join(dist, 'data'), { recursive: true });
-for (const file of ['index.html', 'app.js', 'worker.js', 'style.css', 'favicon.svg', 'vercel.json', '.vercelignore']) {
+for (const file of ['index.html', 'app.js', 'worker.js', 'feeds.mjs', 'style.css', 'favicon.svg', 'vercel.json', '.vercelignore']) {
   await copyFile(path.join(root, 'web', file), path.join(dist, file));
 }
+await cp(path.join(root, 'web/api'), path.join(dist, 'api'), { recursive: true });
 await cp(path.join(root, 'web/pkg'), path.join(dist, 'pkg'), { recursive: true });
 
 // Package only public Natural Earth geography, never local GADM files or caches.

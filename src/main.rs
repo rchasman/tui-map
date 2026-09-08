@@ -44,6 +44,9 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent) {
         MouseEventKind::ScrollRight => app.pan(15, 0),
         // Click and drag to pan
         MouseEventKind::Down(MouseButton::Left) => {
+            if app.feeds.inspect {
+                app.feeds.select(&app.projection, mouse.column, mouse.row);
+            }
             app.start_drag(mouse.column, mouse.row);
         }
         MouseEventKind::Drag(MouseButton::Left) => {
@@ -54,7 +57,11 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent) {
         }
         // Right click to launch nuke
         MouseEventKind::Down(MouseButton::Right) => {
-            app.launch_nuke(mouse.column, mouse.row);
+            if app.feeds.inspect {
+                app.feeds.select(&app.projection, mouse.column, mouse.row);
+            } else {
+                app.launch_nuke(mouse.column, mouse.row);
+            }
         }
         _ => {}
     }
@@ -80,6 +87,7 @@ fn run(terminal: &mut DefaultTerminal) -> Result<()> {
     app.map_renderer.build_spatial_indexes();
 
     draw_frame(terminal, &mut app)?;
+    let mut feed_client = tui_map::feeds::native::Client::default();
     let mut next_frame = Instant::now() + FRAME_INTERVAL;
     loop {
         let now = Instant::now();
@@ -87,6 +95,8 @@ fn run(terminal: &mut DefaultTerminal) -> Result<()> {
             // Input frequency must not change the animation rate. Drawing uses
             // part of this frame's budget rather than adding to a fixed sleep.
             next_frame = advance_frame_deadline(next_frame, now);
+            let center = (app.projection.center_lon(), app.projection.center_lat());
+            feed_client.tick(&mut app.feeds, center);
             app.update_explosions();
             draw_frame(terminal, &mut app)?;
         }
@@ -98,6 +108,11 @@ fn run(terminal: &mut DefaultTerminal) -> Result<()> {
                 Event::Key(key) => {
                     // Only handle key press events (not release)
                     if key.kind == KeyEventKind::Press {
+                        if let KeyCode::Char(c) = key.code {
+                            if app.feeds.command(&c.to_string()) {
+                                continue;
+                            }
+                        }
                         match key.code {
                             KeyCode::Char('q') | KeyCode::Esc => app.quit(),
 
@@ -147,14 +162,20 @@ fn run(terminal: &mut DefaultTerminal) -> Result<()> {
                             // Launch weapon at cursor
                             KeyCode::Char(' ') => {
                                 if let Some((col, row)) = app.mouse_pos {
-                                    app.launch_nuke(col, row);
+                                    if app.feeds.inspect {
+                                        app.feeds.select(&app.projection, col, row);
+                                    } else {
+                                        app.launch_nuke(col, row);
+                                    }
                                 }
                             }
 
                             // Reset view
                             KeyCode::Char('r') | KeyCode::Char('0') => {
                                 let size = terminal.size()?;
+                                let feeds = std::mem::take(&mut app.feeds);
                                 app = App::new(size.width as usize, size.height as usize);
+                                app.feeds = feeds;
                                 let _ = data::load_all_geojson(&mut app.map_renderer, data_dir);
                                 if !app.map_renderer.has_data() {
                                     data::generate_simple_world(&mut app.map_renderer);

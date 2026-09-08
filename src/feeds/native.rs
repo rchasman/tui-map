@@ -36,6 +36,10 @@ impl Client {
                 let result = (|| -> anyhow::Result<String> {
                     Ok(agent
                         .get(&request.url)
+                        .header(
+                            "User-Agent",
+                            "tui-map/0.1 (+https://github.com/rchasman/tui-map)",
+                        )
                         .call()?
                         .body_mut()
                         .with_config()

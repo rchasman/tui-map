@@ -81,3 +81,31 @@ test('TUI menu clicks select effects without firing and control pause and help',
     assert.equal(JSON.parse(app.status()).frame, frame + 1);
   } finally { app.free(); }
 });
+
+test('live layers ingest, inspect, expire and survive reset without duplicate requests',()=>{
+  const app=new BrowserApp(120,50);const now=1788800000;
+  try {
+    assert.deepEqual(JSON.parse(app.feed_requests(now)),[]);
+    app.command('7');app.command('8');app.command('9');app.command('t');
+    const requests=JSON.parse(app.feed_requests(now));assert.equal(requests.length,4);
+    assert.deepEqual(JSON.parse(app.feed_requests(now+1)),[]);
+    const quake=JSON.stringify({type:'FeatureCollection',features:[{id:'q',geometry:{type:'Point',coordinates:[0,20,10]},properties:{mag:4.5,place:'Test quake',time:now*1000}}]});
+    for(const r of requests){
+      if(r.kind==='quakes')app.feed_complete(r.id,quake,'',now);
+      else if(r.kind==='hazards')app.feed_complete(r.id,'{"events":[]}','',now);
+      else app.feed_complete(r.id,'','Test outage',now);
+    }
+    const status=JSON.parse(app.status());
+    assert.equal(status.feeds[0].state,'LIVE');assert.equal(status.feeds[1].state,'EMPTY');assert.equal(status.feeds[2].state,'OFFLINE');
+    app.command('i');app.render();
+    const mapRows=JSON.parse(app.status()).mapRows;
+    app.pointer('fire',60,Math.floor((mapRows-1)/2));
+    assert.equal(JSON.parse(app.status()).effects,0);
+    assert.ok(JSON.parse(app.status()).selected);
+    assert.equal(app.render().length,120*50*3);
+    app.command('r');assert.equal(JSON.parse(app.status()).feeds[0].count,1);
+    assert.deepEqual(JSON.parse(app.feed_requests(now+2)),[]);
+    app.command('7');assert.equal(JSON.parse(app.status()).feeds[0].state,'OFF');
+    app.resize(40,16);assert.equal(app.render().length,40*16*3);
+  } finally {app.free();}
+});

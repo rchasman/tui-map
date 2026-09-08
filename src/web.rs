@@ -124,6 +124,9 @@ impl BrowserApp {
             "start" => self.app.start_drag(col, row),
             "drag" => self.app.handle_drag(col, row),
             "end" => self.app.end_drag(),
+            "fire" if self.app.feeds.inspect => {
+                self.app.feeds.select(&self.app.projection, col, row)
+            }
             "fire" => self.app.launch_nuke(col, row),
             "in" => self.app.zoom_in_at(col, row),
             "out" => self.app.zoom_out_at(col, row),
@@ -137,6 +140,9 @@ impl BrowserApp {
             if matches!(key, "?" | "Escape") {
                 self.help = false;
             }
+            return;
+        }
+        if self.app.feeds.command(key) {
             return;
         }
         match key {
@@ -161,6 +167,11 @@ impl BrowserApp {
             "j" | "ArrowDown" => self.app.pan(0, 4),
             "+" | "=" => self.app.zoom_in(),
             "-" => self.app.zoom_out(),
+            " " if self.app.feeds.inspect => {
+                if let Some((col, row)) = self.app.mouse_pos {
+                    self.app.feeds.select(&self.app.projection, col, row);
+                }
+            }
             " " => {
                 if let Some((col, row)) = self.app.mouse_pos {
                     self.app.launch_nuke(col, row);
@@ -179,10 +190,12 @@ impl BrowserApp {
             }
         }
         renderer.invalidate_cache();
+        let feeds = std::mem::take(&mut self.app.feeds);
         self.app = App::new(
             self.width as usize,
             (self.height - ui::menu::layout(self.width).0) as usize,
         );
+        self.app.feeds = feeds;
         self.app.frame = 30;
         self.paused = false;
         self.map_drag = false;
@@ -225,8 +238,28 @@ impl BrowserApp {
         Ok(output)
     }
 
+    pub fn feed_requests(&mut self, now: f64) -> String {
+        let center = (
+            self.app.projection.center_lon(),
+            self.app.projection.center_lat(),
+        );
+        serde_json::to_string(&self.app.feeds.requests(now, center)).unwrap()
+    }
+
+    pub fn feed_complete(&mut self, id: u32, body: &str, error: &str, now: f64) {
+        self.app.feeds.complete(
+            id,
+            if error.is_empty() {
+                Ok(body)
+            } else {
+                Err(error.to_owned())
+            },
+            now,
+        );
+    }
+
     pub fn status(&self) -> String {
-        serde_json::json!({"weapon":self.app.active_weapon.label(),
+        serde_json::json!({"feeds":self.app.feeds.status(),"inspect":self.app.feeds.inspect,"selected":self.app.feeds.selected,"weapon":self.app.active_weapon.label(),
             "projection":if matches!(self.app.projection,Projection::Globe(_)){"Globe"}else{"Mercator"},
             "zoom":self.app.zoom_level(),"center":self.app.center_coords(),
             "fires":self.app.fires.len(),"effects":self.app.explosions.len(),

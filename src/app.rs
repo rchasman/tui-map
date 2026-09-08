@@ -171,6 +171,7 @@ impl FireGrid {
 
 /// Application state
 pub struct App {
+    pub feeds: crate::feeds::Feeds,
     pub projection: Projection,
     pub map_renderer: MapRenderer,
     pub should_quit: bool,
@@ -225,6 +226,7 @@ impl App {
         Self {
             projection: Projection::Globe(GlobeViewport::new(0.0, 20.0, GlobeViewport::world_radius(pixel_width, pixel_height), pixel_width, pixel_height)),
             map_renderer: MapRenderer::new(),
+            feeds: crate::feeds::Feeds::default(),
             should_quit: false,
             last_mouse: None,
             mouse_pos: None,

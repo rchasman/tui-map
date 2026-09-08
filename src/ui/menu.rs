@@ -32,6 +32,7 @@ const GROUPS: &[&[(&str, &str)]] = &[
         ("L", "L Labels"),
         ("p", "p Population"),
     ],
+    &[("7", "7 Quakes"), ("8", "8 Hazards"), ("9", "9 Aircraft"), ("t", "t Satellites"), ("i", "i Inspect")],
 ];
 
 pub struct Item {
@@ -94,6 +95,11 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect, paused: bool, help: bool
             "c" => settings.show_cities,
             "L" => settings.show_labels,
             "p" => settings.show_population,
+            "7" => app.feeds.layers[0].enabled,
+            "8" => app.feeds.layers[1].enabled,
+            "9" => app.feeds.layers[2].enabled,
+            "t" => app.feeds.layers[3].enabled,
+            "i" => app.feeds.inspect,
             "Escape" => paused,
             _ => false,
         };
@@ -120,7 +126,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect, paused: bool, help: bool
     if help {
         let size = frame.area();
         let width = size.width.min(64);
-        let height = size.height.min(17);
+        let height = size.height.min(19);
         let area = Rect::new(
             (size.width - width) / 2,
             (size.height - height) / 2,
@@ -128,7 +134,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect, paused: bool, help: bool
             height,
         );
         frame.render_widget(Clear, area);
-        frame.render_widget(Paragraph::new("Drag / swipe: rotate or pan\nClick / tap / Space: release effect\nScroll / +/-: zoom\n1-6: select effect\nArrows / hjkl: pan\ng: globe / flat map\nEsc: pause / resume   r: reset\n\nWater + fire = steam\nEMP + gas = electric filaments\nWater + life = blooms\n\nClick or press ? / Esc to close")
+        frame.render_widget(Paragraph::new("Drag / swipe: rotate or pan\nClick / tap / Space: release effect\nScroll / +/-: zoom\n1-6: select effect\n7/8/9/t: quakes / hazards / aircraft / satellites\ni: inspect markers (click without effects)\nArrows / hjkl: pan\ng: globe / flat map\nEsc: pause / resume   r: reset\n\nWater + fire = steam\nEMP + gas = electric filaments\nWater + life = blooms\n\nClick or press ? / Esc to close")
             .wrap(Wrap { trim: true }).block(Block::default().borders(Borders::ALL).title(" Help "))
             .style(Style::default().fg(Color::Cyan).bg(Color::Black)), area);
     }
@@ -141,7 +147,7 @@ mod tests {
     fn all_controls_fit_and_hit_their_own_cells() {
         for width in [40, 55, 120, 240] {
             let (height, items) = layout(width);
-            assert_eq!(items.len(), 18);
+            assert_eq!(items.len(), 23);
             for item in items {
                 assert!(item.area.right() < width);
                 assert!(item.area.bottom() < height);
