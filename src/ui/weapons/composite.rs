@@ -65,6 +65,48 @@ mod tests {
     }
 
     #[test]
+    fn sparse_cells_survive_word_boundaries_and_resize_without_stale_pixels() {
+        let mut compositor = Compositor::default();
+        for area in [Rect::new(7, 9, 65, 2), Rect::new(3, 2, 1, 1)] {
+            compositor.begin(area);
+            let indices = [
+                0,
+                area.width as usize - 1,
+                area.width as usize,
+                compositor.cells.len() - 1,
+            ];
+            for idx in indices.into_iter().filter(|&i| i < compositor.cells.len()) {
+                compositor.scratch.content[idx]
+                    .set_char('⠁')
+                    .set_fg(Color::Rgb(40, 60, 80));
+            }
+            compositor.collect(area);
+            assert!(compositor
+                .scratch
+                .content
+                .iter()
+                .all(|cell| cell.symbol() == " "));
+            let mut actual = Buffer::empty(area);
+            compositor.resolve(&mut actual, false);
+            for (idx, cell) in actual.content.iter().enumerate() {
+                assert_eq!(
+                    cell.symbol(),
+                    if indices.contains(&idx) { "⠁" } else { " " }
+                );
+            }
+            compositor.begin(area);
+            compositor.scratch.content[0]
+                .set_char('X')
+                .set_fg(Color::Red);
+            compositor.collect(area);
+            actual.reset();
+            compositor.resolve(&mut actual, false);
+            assert!(actual.content.iter().all(|cell| cell.symbol() == " "));
+            assert_eq!(compositor.scratch.content[0].symbol(), " ");
+        }
+    }
+
+    #[test]
     fn crossed_light_unions_dots_and_caps_brightness() {
         let area = Rect::new(0, 0, 1, 1);
         let mut compositor = Compositor::default();
@@ -78,7 +120,7 @@ mod tests {
             .set_fg(Color::Rgb(0, 100, 200));
         compositor.collect(area);
         let mut buf = Buffer::empty(area);
-        compositor.resolve(area, &mut buf, true);
+        compositor.resolve(&mut buf, true);
         assert_eq!(buf[(0, 0)].symbol(), "⠉");
         assert_eq!(buf[(0, 0)].fg, Color::Rgb(200, 200, 200));
         compositor.scratch[(0, 0)]
@@ -86,7 +128,7 @@ mod tests {
             .set_fg(Color::Rgb(200, 100, 0));
         compositor.collect(area);
         buf.reset();
-        compositor.resolve(area, &mut buf, true);
+        compositor.resolve(&mut buf, true);
         assert_eq!(buf[(0, 0)].fg, Color::Rgb(255, 191, 127));
     }
 }
@@ -94,6 +136,8 @@ mod tests {
 pub struct Compositor {
     scratch: Buffer,
     cells: Vec<Contribution>,
+    // One bit per contributed cell; resolve skips untouched screen regions.
+    dirty: Vec<u64>,
 }
 
 impl Default for Compositor {
@@ -101,6 +145,7 @@ impl Default for Compositor {
         Self {
             scratch: Buffer::empty(Rect::default()),
             cells: Vec::new(),
+            dirty: Vec::new(),
         }
     }
 }
@@ -114,28 +159,38 @@ impl Compositor {
             Contribution::default(),
         );
         self.cells.fill(Contribution::default());
+        self.dirty.resize(self.cells.len().div_ceil(64), 0);
+        self.dirty.fill(0);
     }
 
     fn collect(&mut self, area: Rect) {
         for y in area.y..area.bottom() {
-            for x in area.x..area.right() {
-                let idx = self.scratch.index_of(x, y);
-                let cell = &self.scratch.content[idx];
+            let start = self.scratch.index_of(area.x, y);
+            let end = start + area.width as usize;
+            for (offset, (cell, entry)) in self.scratch.content[start..end]
+                .iter_mut()
+                .zip(&mut self.cells[start..end])
+                .enumerate()
+            {
                 let ch = cell.symbol().chars().next().unwrap_or(' ');
+                let fg = cell.fg;
+                // Clear while collecting, avoiding a second whole-buffer pass.
+                // Every source in a render uses this same clipped area.
+                cell.reset();
                 if ch == ' ' {
                     continue;
                 }
-                let Color::Rgb(r, g, b) = cell.fg else {
+                let Color::Rgb(r, g, b) = fg else {
                     continue;
                 };
-                let entry = &mut self.cells[idx];
+                let idx = start + offset;
+                self.dirty[idx / 64] |= 1u64 << (idx % 64);
                 entry.rgb[0] += r as u32;
                 entry.rgb[1] += g as u32;
                 entry.rgb[2] += b as u32;
                 if ('\u{2800}'..='\u{28ff}').contains(&ch) {
                     entry.bits |= ch as u32 - 0x2800;
                 } else {
-                    // Brightest body wins shape; ties use a stable character key.
                     let candidate = (r as u32 + g as u32 + b as u32, ch);
                     if entry.glyph.is_none_or(|old| candidate > old) {
                         entry.glyph = Some(candidate);
@@ -143,17 +198,20 @@ impl Compositor {
                 }
             }
         }
-        self.scratch.reset();
     }
 
-    fn resolve(&self, area: Rect, buf: &mut Buffer, light: bool) {
-        for y in area.y..area.bottom() {
-            for x in area.x..area.right() {
-                let entry = self.cells[self.scratch.index_of(x, y)];
+    fn resolve(&self, buf: &mut Buffer, light: bool) {
+        debug_assert_eq!(self.scratch.area, buf.area);
+        for (word, &bits) in self.dirty.iter().enumerate() {
+            let mut pending = bits;
+            while pending != 0 {
+                let idx = word * 64 + pending.trailing_zeros() as usize;
+                pending &= pending - 1;
+                let entry = self.cells[idx];
                 if entry.rgb == [0; 3] {
                     continue;
                 }
-                let cell = &mut buf[(x, y)];
+                let cell = &mut buf.content[idx];
                 let previous = cell.symbol().chars().next().unwrap_or(' ');
                 let mut rgb = entry.rgb;
                 if light {
@@ -245,9 +303,10 @@ impl Compositor {
             }
             self.collect(area);
         }
-        self.resolve(area, buf, false);
+        self.resolve(buf, false);
 
         self.cells.fill(Contribution::default());
+        self.dirty.fill(0);
         for field in &world.fields {
             if field.progress() >= 1.0 {
                 continue;
@@ -273,6 +332,6 @@ impl Compositor {
             reactions::residue(reaction, projection, area, &mut self.scratch);
         }
         self.collect(area);
-        self.resolve(area, buf, true);
+        self.resolve(buf, true);
     }
 }
