@@ -560,7 +560,6 @@ impl<'a> Widget for MapWidget<'a> {
 }
 
 fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
-    let settings = &app.map_renderer.settings;
 
     let status = Line::from(vec![
         Span::styled(
@@ -572,30 +571,6 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         Span::styled(" (", Style::default().fg(Color::DarkGray)),
         Span::styled(app.lod_level(), Style::default().fg(Color::Magenta)),
         Span::styled(") ", Style::default().fg(Color::DarkGray)),
-        Span::styled(
-            if settings.show_borders { "[B]order " } else { "[b]order " },
-            Style::default().fg(if settings.show_borders { Color::Green } else { Color::DarkGray }),
-        ),
-        Span::styled(
-            if settings.show_states { "[S]tate " } else { "[s]tate " },
-            Style::default().fg(if settings.show_states { Color::Green } else { Color::DarkGray }),
-        ),
-        Span::styled(
-            if settings.show_counties { "[Y]county " } else { "[y]county " },
-            Style::default().fg(if settings.show_counties { Color::Green } else { Color::DarkGray }),
-        ),
-        Span::styled(
-            if settings.show_cities { "[C]ities " } else { "[c]ities " },
-            Style::default().fg(if settings.show_cities { Color::Green } else { Color::DarkGray }),
-        ),
-        Span::styled(
-            if settings.show_labels { "[L]abels " } else { "[l]abels " },
-            Style::default().fg(if settings.show_labels { Color::Green } else { Color::DarkGray }),
-        ),
-        Span::styled(
-            if settings.show_population { "[P]op " } else { "[p]op " },
-            Style::default().fg(if settings.show_population { Color::Green } else { Color::DarkGray }),
-        ),
         Span::styled("| ", Style::default().fg(Color::DarkGray)),
         Span::styled(app.center_coords(), Style::default().fg(Color::Cyan)),
         Span::styled("| ", Style::default().fg(Color::DarkGray)),

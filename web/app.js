@@ -1,3 +1,4 @@
+import {createLayerPicker} from './layers.mjs';
 import {createInspector} from './inspector.mjs';
 import {createCellPainter} from './canvas.mjs';
 const canvas=document.querySelector('#world'),stage=document.querySelector('#stage');
@@ -9,6 +10,8 @@ let gesture=null,lastPointer=null,pointerMove=null;
 let lastRequest=0;
 let paint=()=>{};
 const updateInspector=createInspector(document.querySelector('#inspector'),()=>{command('Escape');canvas.focus({preventScroll:true});});
+
+const updateLayers=createLayerPicker(document.querySelector('#layers'),command);
 
 function send(message){worker.postMessage(message);}
 function resize(){
@@ -31,6 +34,7 @@ function resize(){
 
 function updateStatus(next){
   updateInspector(next.details);
+  updateLayers(next);
   canvas.dataset.feeds=JSON.stringify(next.feeds);
   canvas.dataset.inspect=String(next.inspect);
   canvas.style.cursor=next.inspect ? 'crosshair' : 'pointer';

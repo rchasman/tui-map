@@ -9,10 +9,10 @@ Play at **https://tui-map.vercel.app** (personal Vercel workspace).
 The browser runs the shared Rust simulation as WebAssembly in a Web Worker.
 A canvas paints the Ratatui cell buffer at up to 30 FPS. Drag to rotate or pan,
 scroll or use the zoom buttons, and click to release any of the nine effects.
-Water is selected on startup and after reset.
-The full-screen terminal includes clickable Ratatui controls for effects, layers,
-projection switching, crosshair selection, reset, and help (`?`). Controls wrap to fit narrow
-screens; the browser only hosts the canvas and forwards input.
+Crosshair selection is the default; Escape clears the selected effect.
+The bottom bar includes clickable Ratatui controls for effects, projection switching,
+crosshair selection, reset, and help (`?`). Controls wrap to fit narrow screens.
+The browser hosts a compact layer picker at the top left and selected details at the top right.
 
 Requires Node.js 24+ and rustup. The repo pins Rust 1.98.1 and wasm-pack 0.15.0:
 
@@ -85,7 +85,7 @@ All feeds start off and require no API keys. The default crosshair selects marke
 clicking does not release an effect until you choose one with `1`–`9`. Press `Esc` (or `i`)
 to return to crosshair selection. Browser clicks and Space select markers;
 terminal left/right clicks and Space do the same. Reset returns to the crosshair
-while preserving feed settings, snapshots and polling deadlines. Feed status remains below the map.
+while preserving feed settings, snapshots and polling deadlines. A compact Layers control at the top left shows active layer names and opens the map, live-feed, Labels, and Population toggles. Letter shortcuts stay in sync; the bottom bar holds effects and navigation.
 Selected marker details appear in a compact square at the top right in the browser,
 with a source link that opens in a new tab. Terminal details remain below the map. The existing
 `L` Labels control covers cities and all four live layers, with labels on by
@@ -125,7 +125,8 @@ On the globe, Nuke, Bio, Chem, Life, Tornado, Frost, and Meteor occupy volumes a
 Their height rotates with Earth: raised tops can remain visible beyond the horizon
 while the planet hides their bases. Particle trails use the same depth test.
 
-- **Water:** expanding swells settle into six seconds of flowing ripples. Overlapping
+- **Water:** a broad, lobed surge sloshes in from a seeded direction, fans out,
+  and rocks back as it settles. Fire is quenched only inside this moving sheet. Overlapping
   splashes share one geographic surface: crests reinforce, troughs cancel, and
   opposing crests break into patchy foam. Submerged pool edges disappear instead
   of drawing rings through neighboring water. This is a damped wave model; it
@@ -135,16 +136,19 @@ while the planet hides their bases. Particle trails use the same depth test.
 - **Bio:** low drifting wisps spread through continuous, porous plumes.
 - **Chem:** heavier, irregular plumes leave attached rivulets and turbulent pockets.
 - **Nuke:** impact-specific billows rise at uneven heights and lean with the plume.
-- **Tornado (`7`):** a rotating funnel lifts spiraling ribbons above a debris skirt.
-  Its winds carry existing fires and Bio/Chem clouds around the center, including
+- **Tornado (`7`):** storms roam along seeded winding paths, with flexing rope or
+  wedge cores, a revolving wall cloud, and rising debris.
+  Its winds carry existing fires and Bio/Chem clouds around the moving center, including
   across the date line. A sustained hollow core compresses gas into a bright rim.
   Overlapping winds add independently of launch order.
   Wind creates no new fire or fallout; water and frost still quench transported fire.
 - **Frost (`8`):** branching ice crystals spread across the surface. The advancing
   cold front quenches fire into steam and leaves a brief cooling field, including
   against new meteor fires. Frost + Life produces blooms like Water + Life.
-- **Meteor (`9`):** an immediate impact ejects fiery ballistic trails above a
-  cooling crater. It damages cities and ignites land without radioactive fallout.
+- **Meteor (`9`):** varied approach angles and speeds lead a bright, fragmenting
+  meteor down to the surface. The landing flash, asymmetric ejecta, shockwave,
+  city damage and fire all start at impact, followed by a cooling oblong crater.
+  No radioactive fallout is created.
   Water and frost suppress its fire and thermal glow.
 - **Water + fire:** the advancing wave extinguishes heat and leaves drifting steam
   and dying embers. Moisture briefly prevents reignition.
@@ -162,7 +166,8 @@ cargo run --release --example effect_lab
 ```
 
 Use `1`–`6` for combinations, `7` for the standalone nuke, or `8`–`9` for
-intersecting water and staggered splashes. Use `Space` to pause,
+intersecting water and staggered splashes; `t` and `m` show roaming tornadoes
+  and meteor descent. Use `Space` to pause,
 `r` to restart, and `q` to quit. The nuke grows from a brief white-hot flash into
 a rounded mushroom cap, then cools into rolling smoke over 90 animation frames.
 To export an animated preview with a timeline and scene selector:

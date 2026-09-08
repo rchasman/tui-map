@@ -27,20 +27,7 @@ const GROUPS: &[&[(&str, &str)]] = &[
         ("r", "r Reset"),
         ("?", "? Help"),
     ],
-    &[
-        ("b", "b Borders"),
-        ("s", "s States"),
-        ("y", "y Counties"),
-        ("c", "c Cities"),
-        ("L", "L Labels"),
-        ("p", "p Population"),
-    ],
-    &[
-        ("e", "e Quakes"),
-        ("d", "d Hazards"),
-        ("a", "a Aircraft"),
-        ("t", "t Satellites"),
-    ],
+
 ];
 
 pub struct Item {
@@ -88,7 +75,6 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect, help: bool) {
             .border_style(Style::default().fg(Color::DarkGray)),
         area,
     );
-    let settings = &app.map_renderer.settings;
     for item in layout(area.width).1 {
         let selected = match item.key {
             "1" => app.active_weapon.label() == "WATER",
@@ -100,16 +86,6 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect, help: bool) {
             "7" => app.active_weapon.label() == "TORNADO",
             "8" => app.active_weapon.label() == "FROST",
             "9" => app.active_weapon.label() == "METEOR",
-            "b" => settings.show_borders,
-            "s" => settings.show_states,
-            "y" => settings.show_counties,
-            "c" => settings.show_cities,
-            "L" => settings.show_labels,
-            "p" => settings.show_population,
-            "e" => app.feeds.layers[0].enabled,
-            "d" => app.feeds.layers[1].enabled,
-            "a" => app.feeds.layers[2].enabled,
-            "t" => app.feeds.layers[3].enabled,
             "Escape" => app.feeds.inspect,
             _ => false,
         };
@@ -155,7 +131,7 @@ mod tests {
     fn all_controls_fit_and_hit_their_own_cells() {
         for width in [40, 55, 120, 240] {
             let (height, items) = layout(width);
-            assert_eq!(items.len(), 25);
+            assert_eq!(items.len(), 15);
             for item in items {
                 assert!(item.area.right() < width);
                 assert!(item.area.bottom() < height);

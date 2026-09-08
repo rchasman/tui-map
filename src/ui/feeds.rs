@@ -59,6 +59,8 @@ fn path(
     }
 }
 pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
+    #[cfg(not(target_arch = "wasm32"))]
+    render_active_layers(frame, app, area);
     let feeds = &app.feeds;
     for layer in &feeds.layers {
         if !layer.visible(feeds.now) {
@@ -228,57 +230,53 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
     app.feeds.label_hits = hits;
 }
 
-/// Information lives in a dedicated footer, never over geographic cells.
-pub fn height(app: &App, width: u16) -> u16 {
-    let count = app.feeds.layers.iter().filter(|l| l.enabled).count() as u16;
-    let details = if cfg!(target_arch = "wasm32") {
-        0
-    } else if app.feeds.selected.is_some() {
-        2
-    } else {
-        0
-    };
-    count.div_ceil((width / 24).max(1)) + details
-}
-pub fn render_info(frame: &mut Frame, app: &App, area: Rect) {
-    if area.is_empty() {
-        return;
-    }
+/// Active feed status occupies compact rows at the map's top left.
+#[cfg(not(target_arch = "wasm32"))]
+fn render_active_layers(frame: &mut Frame, app: &App, area: Rect) {
     let feeds = &app.feeds;
-    let columns = (area.width / 24).max(1);
-    let enabled: Vec<_> = feeds.layers.iter().filter(|l| l.enabled).collect();
-    #[cfg(not(target_arch = "wasm32"))]
-    let summary_rows = (enabled.len() as u16).div_ceil(columns);
-    let cell_width = area.width / columns;
-    for (i, l) in enabled.iter().enumerate() {
-        let row = i as u16 / columns;
-        if row >= area.height {
-            break;
-        }
-        let count = if l.visible(feeds.now) {
-            l.markers.len()
+    for (row, layer) in feeds
+        .layers
+        .iter()
+        .filter(|l| l.enabled)
+        .take(area.height as usize)
+        .enumerate()
+    {
+        let count = if layer.visible(feeds.now) {
+            layer.markers.len()
         } else {
             0
         };
-        let source = match l.kind {
+        let source = match layer.kind {
             Kind::Quakes => "USGS",
             Kind::Hazards => "EONET",
             Kind::Aircraft => "adsb.lol",
             Kind::Satellites => "CelesTrak",
         };
         frame.render_widget(
-            Paragraph::new(format!("{source} {count} {}", l.state(feeds.now)))
-                .style(Style::default().fg(color(l.kind))),
-            Rect::new(
-                area.x + (i as u16 % columns) * cell_width,
-                area.y + row,
-                cell_width,
-                1,
-            ),
+            Paragraph::new(format!(
+                "{} · {source} · {count} {}",
+                layer.kind.label(),
+                layer.state(feeds.now)
+            ))
+            .style(Style::default().fg(color(layer.kind))),
+            Rect::new(area.x, area.y + row as u16, area.width.min(48), 1),
         );
     }
+}
+
+/// Only native terminal details reserve footer rows; browser details use HTML.
+pub fn height(app: &App, _width: u16) -> u16 {
+    if !cfg!(target_arch = "wasm32") && app.feeds.selected.is_some() {
+        2
+    } else {
+        0
+    }
+}
+pub fn render_info(_frame: &mut Frame, _app: &App, _area: Rect) {
     #[cfg(not(target_arch = "wasm32"))]
     {
+        let (frame, app, area) = (_frame, _app, _area);
+        let feeds = &app.feeds;
         let selected = feeds.selected.as_ref().and_then(|(k, id)| {
             let layer = &feeds.layers[k.index()];
             layer
@@ -307,10 +305,10 @@ pub fn render_info(frame: &mut Frame, app: &App, area: Rect) {
                 format!("{} · {}", m.detail, m.url),
             ];
             for (i, line) in lines.into_iter().enumerate() {
-                if i as u16 + summary_rows < area.height {
+                if (i as u16) < area.height {
                     frame.render_widget(
                         Paragraph::new(line).style(Style::default().fg(Color::White)),
-                        Rect::new(area.x, area.y + summary_rows + i as u16, area.width, 1),
+                        Rect::new(area.x, area.y + i as u16, area.width, 1),
                     );
                 }
             }

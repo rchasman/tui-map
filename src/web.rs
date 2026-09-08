@@ -279,7 +279,11 @@ impl BrowserApp {
                 "lat":m.lat,"lon":m.lon,"observed":m.observed,"state":layer.state(self.app.feeds.now)
             }))
         });
-        serde_json::json!({"details":details,"feeds":self.app.feeds.status(),"inspect":self.app.feeds.inspect,"selected":self.app.feeds.selected,"weapon":if self.app.feeds.inspect {"CROSSHAIR"} else {self.app.active_weapon.label()},
+        let settings = &self.app.map_renderer.settings;
+        serde_json::json!({"mapLayers":{
+            "b":settings.show_borders,"s":settings.show_states,"y":settings.show_counties,
+            "c":settings.show_cities,"L":settings.show_labels,"p":settings.show_population
+        },"details":details,"feeds":self.app.feeds.status(),"inspect":self.app.feeds.inspect,"selected":self.app.feeds.selected,"weapon":if self.app.feeds.inspect {"CROSSHAIR"} else {self.app.active_weapon.label()},
             "projection":if matches!(self.app.projection,Projection::Globe(_)){"Globe"}else{"Mercator"},
             "zoom":self.app.zoom_level(),"center":self.app.center_coords(),
             "fires":self.app.fires.len(),"effects":self.app.explosions.len(),
