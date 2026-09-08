@@ -1,13 +1,19 @@
 use crate::map::{LineString, Lod, MapRenderer};
 use anyhow::Result;
 use geojson::{GeoJson, Geometry, GeometryValue};
+#[cfg(not(target_arch = "wasm32"))]
 use rayon::prelude::*;
+#[cfg(not(target_arch = "wasm32"))]
 use std::fs;
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::{Path, PathBuf};
 
-/// Parse GeoJSON using SIMD-accelerated JSON parsing
-fn parse_geojson(mut bytes: Vec<u8>) -> Result<GeoJson> {
-    Ok(simd_json::serde::from_slice(&mut bytes)?)
+/// Parse with SIMD on desktop and the portable JSON parser in browsers.
+fn parse_geojson(bytes: Vec<u8>) -> Result<GeoJson> {
+    #[cfg(not(target_arch = "wasm32"))]
+    { let mut bytes = bytes; Ok(simd_json::serde::from_slice(&mut bytes)?) }
+    #[cfg(target_arch = "wasm32")]
+    { Ok(serde_json::from_slice(&bytes)?) }
 }
 
 /// Intermediate city data extracted during parallel parsing
@@ -26,7 +32,9 @@ enum FileKind {
     Border(Lod),
     State,
     County,
+    #[cfg(not(target_arch = "wasm32"))]
     City,
+    #[cfg(not(target_arch = "wasm32"))]
     LandPolygon(Lod),
 }
 
@@ -35,10 +43,12 @@ enum LoadResult {
     Lines(Vec<LineString>, FileKind),
     Polygons(Vec<Vec<Vec<(f64, f64)>>>, Lod),
     Cities(Vec<CityData>),
+    #[cfg(not(target_arch = "wasm32"))]
     Failed(String, String), // filename, error
 }
 
 /// Load a single file and parse its geometries (no renderer dependency)
+#[cfg(not(target_arch = "wasm32"))]
 fn load_file(path: &Path, kind: FileKind) -> LoadResult {
     let content = match fs::read(path) {
         Ok(c) => c,
@@ -128,6 +138,7 @@ fn extract_cities(geojson: &GeoJson) -> Vec<CityData> {
 }
 
 /// Load all available Natural Earth GeoJSON data into the map renderer
+#[cfg(not(target_arch = "wasm32"))]
 pub fn load_all_geojson(renderer: &mut MapRenderer, data_dir: &Path) -> Result<()> {
     // Collect all file tasks
     let mut tasks: Vec<(PathBuf, FileKind)> = Vec::new();
@@ -202,52 +213,81 @@ pub fn load_all_geojson(renderer: &mut MapRenderer, data_dir: &Path) -> Result<(
         .map(|(path, kind)| load_file(&path, kind))
         .collect();
 
-    // Merge results sequentially into renderer (just pushing to Vecs — fast)
-    for result in results {
-        match result {
-            LoadResult::Lines(lines, kind) => {
-                match kind {
-                    FileKind::Coastline(lod) => {
-                        for line in lines {
-                            match lod {
-                                Lod::Low => renderer.coastlines_low.push(line),
-                                Lod::Medium => renderer.coastlines_medium.push(line),
-                                Lod::High => renderer.coastlines_high.push(line),
-                            }
+    for result in results { merge_result(renderer, result); }
+    Ok(())
+}
+
+fn merge_result(renderer: &mut MapRenderer, result: LoadResult) {
+    match result {
+        LoadResult::Lines(lines, kind) => {
+            match kind {
+                FileKind::Coastline(lod) => {
+                    for line in lines {
+                        match lod {
+                            Lod::Low => renderer.coastlines_low.push(line),
+                            Lod::Medium => renderer.coastlines_medium.push(line),
+                            Lod::High => renderer.coastlines_high.push(line),
                         }
                     }
-                    FileKind::Border(lod) => {
-                        for line in lines {
-                            match lod {
-                                Lod::Medium | Lod::Low => renderer.borders_medium.push(line),
-                                Lod::High => renderer.borders_high.push(line),
-                            }
+                }
+                FileKind::Border(lod) => {
+                    for line in lines {
+                        match lod {
+                            Lod::Medium | Lod::Low => renderer.borders_medium.push(line),
+                            Lod::High => renderer.borders_high.push(line),
                         }
                     }
-                    FileKind::State => renderer.states.extend(lines),
-                    FileKind::County => renderer.counties.extend(lines),
-                    _ => {}
                 }
-            }
-            LoadResult::Polygons(polygons, lod) => {
-                for rings in polygons {
-                    renderer.add_land_polygon(rings, lod);
-                }
-            }
-            LoadResult::Cities(cities) => {
-                for city in cities {
-                    renderer.add_city(
-                        city.lon, city.lat, &city.name,
-                        city.population, city.is_capital, city.is_megacity,
-                    );
-                }
-            }
-            LoadResult::Failed(filename, error) => {
-                eprintln!("Warning: Failed to load {}: {}", filename, error);
+                FileKind::State => renderer.states.extend(lines),
+                FileKind::County => renderer.counties.extend(lines),
+                #[cfg(not(target_arch = "wasm32"))]
+                _ => {}
             }
         }
+        LoadResult::Polygons(polygons, lod) => {
+            for rings in polygons {
+                renderer.add_land_polygon(rings, lod);
+            }
+        }
+        LoadResult::Cities(cities) => {
+            for city in cities {
+                renderer.add_city(
+                    city.lon, city.lat, &city.name,
+                    city.population, city.is_capital, city.is_megacity,
+                );
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        LoadResult::Failed(filename, error) => {
+            eprintln!("Warning: Failed to load {}: {}", filename, error);
+        }
     }
+}
 
+/// Load a fetched or embedded layer through the same geometry extraction as desktop.
+pub fn load_geojson_bytes(renderer: &mut MapRenderer, kind: &str, lod: Lod, bytes: Vec<u8>) -> Result<()> {
+    let geojson = parse_geojson(bytes)?;
+    let result = match kind {
+        "cities" => LoadResult::Cities(extract_cities(&geojson)),
+        "land" => {
+            let mut polygons = Vec::new();
+            process_geojson_polygons(&geojson, |p| polygons.push(p));
+            LoadResult::Polygons(polygons,lod)
+        },
+        _ => {
+            let kind = match kind {
+                "coastline" => FileKind::Coastline(lod),
+                "borders" => FileKind::Border(lod),
+                "states" => FileKind::State,
+                "counties" => FileKind::County,
+                _ => anyhow::bail!("Unknown map layer: {kind}"),
+            };
+            let mut lines = Vec::new();
+            process_geojson_lines(&geojson, |points| lines.push(LineString::new(points)));
+            LoadResult::Lines(lines,kind)
+        }
+    };
+    merge_result(renderer,result);
     Ok(())
 }
 

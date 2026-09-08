@@ -6,6 +6,13 @@ use crate::map::projection::{Projection, Viewport, WRAP_OFFSETS, mercator_x, mer
 use crate::map::spatial::{FeatureGrid, SpatialGrid};
 use std::cell::RefCell;
 use std::rc::Rc;
+#[cfg(not(target_arch = "wasm32"))]
+use rayon::join;
+
+#[cfg(target_arch = "wasm32")]
+fn join<A, B>(a: impl FnOnce() -> A, b: impl FnOnce() -> B) -> (A, B) {
+    (a(), b())
+}
 
 /// Rendered map layers with separate canvases for color differentiation.
 /// Static layers use Rc — cache hits are a refcount bump, not a memcpy.
@@ -303,6 +310,7 @@ impl LandGrid {
     const TOTAL_BITS: usize = Self::WIDTH * Self::HEIGHT; // 103,680,000
     const BITMAP_LEN: usize = (Self::TOTAL_BITS + 63) / 64; // ~12.3MB
     /// Cache format version — bump when resolution or layout changes
+    #[cfg(not(target_arch = "wasm32"))]
     const CACHE_VERSION: u32 = 1;
 
     pub fn new() -> Self {
@@ -373,6 +381,7 @@ impl LandGrid {
     }
 
     /// Cache file path keyed by version, polygon count, and total vertex count.
+    #[cfg(not(target_arch = "wasm32"))]
     fn cache_path(poly_count: usize, total_verts: usize) -> std::path::PathBuf {
         let mut path = std::env::temp_dir();
         path.push(format!("tui_map_land_v{}_p{}_e{}.bin",
@@ -381,6 +390,7 @@ impl LandGrid {
     }
 
     /// Try loading a pre-built grid from disk cache.
+    #[cfg(not(target_arch = "wasm32"))]
     fn try_load_cache(path: &std::path::Path) -> Option<Self> {
         let data = std::fs::read(path).ok()?;
         let expected = Self::BITMAP_LEN * 8 + 360 * 180;
@@ -396,6 +406,7 @@ impl LandGrid {
     }
 
     /// Save grid to disk cache for instant subsequent loads.
+    #[cfg(not(target_arch = "wasm32"))]
     fn save_cache(&self, path: &std::path::Path) {
         let mut data = Vec::with_capacity(Self::BITMAP_LEN * 8 + 360 * 180);
         for &word in &self.bitmap {
@@ -408,6 +419,10 @@ impl LandGrid {
     /// Build land grid: loads from disk cache if available, otherwise
     /// builds via scanline rasterization and caches for next startup.
     pub fn from_polygons(polygons: &[Polygon]) -> Self {
+        #[cfg(target_arch = "wasm32")]
+        { Self::build_scanline(polygons) }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
         let total_verts: usize = polygons.iter()
             .map(|p| p.rings.iter().map(|r| r.len()).sum::<usize>())
             .sum();
@@ -420,16 +435,21 @@ impl LandGrid {
         let grid = Self::build_scanline(polygons);
         grid.save_cache(&cache);
         grid
+        }
     }
 
     /// Scanline rasterization: for each row, compute edge crossings once
     /// then fill spans between pairs (even-odd rule). O(rows × edges)
     /// vs old brute-force O(cells × edges). Parallelized with rayon.
     pub fn build_scanline(polygons: &[Polygon]) -> Self {
+        #[cfg(not(target_arch = "wasm32"))]
         use rayon::prelude::*;
 
-        let chunk_size = (polygons.len() / rayon::current_num_threads().max(1)).max(1);
-        let sub_bitmaps: Vec<Vec<u64>> = polygons.par_chunks(chunk_size)
+        #[cfg(not(target_arch = "wasm32"))]
+        let chunks = polygons.par_chunks((polygons.len() / rayon::current_num_threads().max(1)).max(1));
+        #[cfg(target_arch = "wasm32")]
+        let chunks = polygons.chunks(polygons.len().max(1));
+        let sub_bitmaps: Vec<Vec<u64>> = chunks
             .map(|chunk| {
                 let mut bitmap = vec![0u64; Self::BITMAP_LEN];
                 let mut crossings = Vec::new();
@@ -714,6 +734,7 @@ impl MapRenderer {
     /// Build spatial indexes for all feature collections in parallel.
     /// Order is fixed: the Vec indices match the grid assignments below.
     pub fn build_spatial_indexes(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
         use rayon::prelude::*;
         const CELL_SIZE: f64 = 5.0;
 
@@ -730,8 +751,11 @@ impl MapRenderer {
         ];
 
         // Build all 7 grids in parallel
-        let grids: Vec<FeatureGrid> = bbox_sets
-            .into_par_iter()
+        #[cfg(not(target_arch = "wasm32"))]
+        let sets = bbox_sets.into_par_iter();
+        #[cfg(target_arch = "wasm32")]
+        let sets = bbox_sets.into_iter();
+        let grids: Vec<FeatureGrid> = sets
             .map(|bbs| FeatureGrid::build(bbs.into_iter(), CELL_SIZE))
             .collect();
 
@@ -848,14 +872,14 @@ impl MapRenderer {
                 + state_candidates.len() + county_candidates.len();
 
             let (coastlines_canvas, borders_canvas, states_canvas, counties_canvas) = if total_candidates > PAR_THRESHOLD {
-                let ((a, b), (c, d)) = rayon::join(
-                    || rayon::join(
+                let ((a, b), (c, d)) = join(
+                    || join(
                         || render_candidates(&coast_candidates, coastlines, width, height,
                             |c, line| draw_linestring_mercator(c, line, viewport, offsets)),
                         || render_candidates(&border_candidates, borders, width, height,
                             |c, line| draw_linestring_mercator(c, line, viewport, offsets)),
                     ),
-                    || rayon::join(
+                    || join(
                         || render_candidates(&state_candidates, states, width, height,
                             |c, line| draw_linestring_mercator(c, line, viewport, offsets)),
                         || render_candidates(&county_candidates, counties, width, height,
@@ -1003,14 +1027,14 @@ impl MapRenderer {
                 + state_candidates.len() + county_candidates.len();
 
             let (coastlines_canvas, borders_canvas, states_canvas, counties_canvas) = if total_candidates > PAR_THRESHOLD {
-                let ((a, b), (c, d)) = rayon::join(
-                    || rayon::join(
+                let ((a, b), (c, d)) = join(
+                    || join(
                         || render_candidates(&coast_candidates, coastlines, width, height,
                             |c, line| draw_linestring_on_globe(c, line, globe)),
                         || render_candidates(&border_candidates, borders, width, height,
                             |c, line| draw_linestring_on_globe(c, line, globe)),
                     ),
-                    || rayon::join(
+                    || join(
                         || render_candidates(&state_candidates, states, width, height,
                             |c, line| draw_linestring_on_globe(c, line, globe)),
                         || render_candidates(&county_candidates, counties, width, height,
@@ -1334,18 +1358,30 @@ where
         }
         return c;
     }
+    #[cfg(not(target_arch = "wasm32"))]
     use rayon::prelude::*;
+    #[cfg(not(target_arch = "wasm32"))]
     let n_chunks = rayon::current_num_threads().min(candidates.len() / 500).max(2);
+    #[cfg(target_arch = "wasm32")]
+    let n_chunks = 1;
     let chunk_size = (candidates.len() + n_chunks - 1) / n_chunks;
-    candidates.par_chunks(chunk_size)
+    #[cfg(not(target_arch = "wasm32"))]
+    let chunks = candidates.par_chunks(chunk_size);
+    #[cfg(target_arch = "wasm32")]
+    let chunks = candidates.chunks(chunk_size);
+    let canvases = chunks
         .map(|chunk| {
             let mut c = BrailleCanvas::new(width, height);
             for &idx in chunk {
                 draw(&mut c, &features[idx]);
             }
             c
-        })
-        .reduce_with(|mut a, b| { a.merge_or(&b); a })
+        });
+    #[cfg(not(target_arch = "wasm32"))]
+    let merged = canvases.reduce_with(|mut a, b| { a.merge_or(&b); a });
+    #[cfg(target_arch = "wasm32")]
+    let merged = canvases.reduce(|mut a, b| { a.merge_or(&b); a });
+    merged
         .unwrap_or_else(|| BrailleCanvas::new(width, height))
 }
 
