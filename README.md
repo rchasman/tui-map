@@ -92,7 +92,10 @@ with a source link that opens in a new tab. Terminal details remain below the ma
 default. Crowded labels are placed around their markers without overlapping
 other labels; zoom in to reveal more. Clicking a label also selects its marker.
 
-Earthquakes have magnitude-sized, age-dimmed markers. Aircraft have short observed
+Live markers use distinct monochrome glyphs: `✈` aircraft, `▥◆▥` satellites,
+`⌁` earthquakes, and category-specific hazard symbols (`♨` fires, `▲` volcanoes,
+`☁` storms, `≋` floods, `☀` drought, `❄` ice/snow, `◩` landslides, `⚠` other).
+Quake labels show magnitude and older events dim. Aircraft have short observed
 trails and heading ticks. Satellite tracks cover approximately 30 minutes either
 side of the current time; positions are **estimates from orbital elements**, not
 live telemetry. Elements older than seven days are rejected. Hazard markers use

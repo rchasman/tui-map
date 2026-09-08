@@ -15,6 +15,42 @@ fn color(kind: Kind) -> Color {
         Kind::Satellites => Color::LightMagenta,
     }
 }
+
+fn glyph(kind: Kind, detail: &str) -> &'static str {
+    match kind {
+        Kind::Aircraft => "✈",
+        // Single-column characters avoid terminal emoji-width differences.
+        Kind::Satellites => "▥◆▥",
+        Kind::Quakes => "⌁",
+        Kind::Hazards => match detail.split('|').next().unwrap_or("").trim() {
+            "Wildfires" => "♨",
+            "Volcanoes" => "▲",
+            "Severe Storms" => "☁",
+            "Floods" => "≋",
+            "Drought" => "☀",
+            "Snow" | "Sea and Lake Ice" => "❄",
+            "Landslides" => "◩",
+            _ => "⚠",
+        },
+    }
+}
+
+fn glyph_area(area: Rect, x: u16, y: u16, symbol: &str) -> Rect {
+    let width = (symbol.chars().count() as u16).min(area.width);
+    let left = x
+        .saturating_sub(width / 2)
+        .max(area.x)
+        .min(area.right() - width);
+    Rect::new(left, y, width, 1)
+}
+
+fn marker_glyph(frame: &mut Frame, area: Rect, x: i32, y: i32, symbol: &str, tint: Color) {
+    let bounds = glyph_area(area, area.x + x as u16 / 2, area.y + y as u16 / 4, symbol);
+    frame.render_widget(
+        Paragraph::new(symbol).style(Style::default().fg(tint).bg(Color::Rgb(8, 14, 22))),
+        bounds,
+    );
+}
 fn point(frame: &mut Frame, area: Rect, x: i32, y: i32, color: Color) {
     if x < 0 || y < 0 || x >= i32::from(area.width) * 2 || y >= i32::from(area.height) * 4 {
         return;
@@ -128,32 +164,14 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
             if layer.kind == Kind::Aircraft {
                 trail.push((marker.lon, marker.lat));
             }
-            if (layer.kind != Kind::Satellites && marker.space_position.is_none()
+            if (layer.kind != Kind::Satellites
+                && marker.space_position.is_none()
                 && marker.space_trail.iter().all(Option::is_none))
                 || !matches!(app.projection, Projection::Globe(_))
             {
                 path(frame, area, &app.projection, &trail, tint);
             }
-            let marker_point = |frame: &mut Frame, x, y| {
-                if let (Projection::Globe(g), Some(p)) = (&app.projection, marker.space_position) {
-                    if !g.elevated_sample_visible(p, x, y) {
-                        return;
-                    }
-                }
-                point(frame, area, x, y, tint);
-            };
-            marker_point(frame, x, y);
-            let radius = if layer.kind == Kind::Quakes {
-                marker.magnitude.round().clamp(1., 5.) as i32
-            } else {
-                1
-            };
-            for d in 1..=radius {
-                marker_point(frame, x - d, y);
-                marker_point(frame, x + d, y);
-                marker_point(frame, x, y - d);
-                marker_point(frame, x, y + d);
-            }
+            marker_glyph(frame, area, x, y, glyph(layer.kind, &marker.detail), tint);
             if let Some(heading) = marker.heading {
                 // Project a short geodesic heading segment, including at the poles.
                 let bearing = heading.to_radians();
@@ -214,7 +232,8 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
                     }
                     let x = area.x + x as u16 / 2;
                     let y = area.y + y as u16 / 4;
-                    occupied.insert((x, y));
+                    let icon = glyph_area(area, x, y, glyph(layer.kind, &marker.detail));
+                    occupied.extend((icon.x..icon.right()).map(|col| (col, y)));
                     let selected = feeds
                         .selected
                         .as_ref()
@@ -300,11 +319,6 @@ fn render_active_layers(frame: &mut Frame, app: &App, area: Rect) {
         .take(area.height as usize)
         .enumerate()
     {
-        let count = if layer.visible(feeds.now) {
-            layer.markers.len()
-        } else {
-            0
-        };
         let source = match layer.kind {
             Kind::Quakes => "USGS",
             Kind::Hazards => "EONET",
@@ -313,9 +327,9 @@ fn render_active_layers(frame: &mut Frame, app: &App, area: Rect) {
         };
         frame.render_widget(
             Paragraph::new(format!(
-                "{} · {source} · {count} {}",
+                "{} · {source} · {}",
                 layer.kind.label(),
-                layer.state(feeds.now)
+                layer.status_label(feeds.now)
             ))
             .style(Style::default().fg(color(layer.kind))),
             Rect::new(area.x, area.y + row as u16, area.width.min(48), 1),
@@ -379,6 +393,30 @@ pub fn render_info(_frame: &mut Frame, _app: &App, _area: Rect) {
 mod tests {
     use super::*;
     use ratatui::{backend::TestBackend, Terminal};
+    #[test]
+    fn satellite_panels_fit_map_edges_and_survive_crossing_trails() {
+        let mut terminal = Terminal::new(TestBackend::new(12, 3)).unwrap();
+        terminal
+            .draw(|frame| {
+                let area = Rect::new(2, 1, 8, 1);
+                let symbol = glyph(Kind::Satellites, "");
+                marker_glyph(frame, area, 0, 0, symbol, Color::Magenta);
+                marker_glyph(frame, area, 15, 0, symbol, Color::Magenta);
+                for x in 0..16 {
+                    point(frame, area, x, 0, Color::Cyan);
+                }
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        for start in [2, 7] {
+            let text = (start..start + 3)
+                .map(|x| buffer[(x, 1)].symbol())
+                .collect::<String>();
+            assert_eq!(text, "▥◆▥");
+        }
+        assert_eq!(buffer[(1, 1)].symbol(), " ");
+        assert_eq!(buffer[(10, 1)].symbol(), " ");
+    }
     #[test]
     fn far_side_orbit_arcs_stay_outside_earth_and_gaps_are_not_joined() {
         use crate::map::{globe::lonlat_to_vec3, GlobeViewport};
