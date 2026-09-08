@@ -85,6 +85,81 @@ fn omm_propagates_and_expired_elements_are_rejected() {
     load(&mut f, "t", OMM, epoch);
     assert_eq!(f.layers[3].state(epoch), "ESTIMATED");
     assert_eq!(f.layers[3].markers[0].trail.len(), 31);
+    let marker = &f.layers[3].markers[0];
+    assert_eq!(marker.space_trail.len(), 31);
+    assert_eq!(marker.space_trail[15], marker.space_position);
+    assert!(marker
+        .space_trail
+        .iter()
+        .flatten()
+        .all(|p| (1.04..1.09).contains(&p.length())));
+    // A fixed Earth rotation keeps the arc in the orbital plane, instead of
+    // twisting it into a future ground track.
+    let normal = marker.space_trail[0]
+        .unwrap()
+        .cross(marker.space_trail[8].unwrap())
+        .normalize();
+    assert!(marker
+        .space_trail
+        .iter()
+        .flatten()
+        .all(|p| normal.dot(*p).abs() < 0.01));
+}
+
+#[test]
+fn aircraft_retains_geometric_altitude_and_elevated_history() {
+    let mut body: Value = serde_json::from_str(&aircraft(1.)).unwrap();
+    body["ac"][0]["alt_geom"] = 35000.into();
+    body["ac"][0]["alt_baro"] = 34000.into();
+    let mut feeds = Feeds::default();
+    load(&mut feeds, "a", &body.to_string(), NOW);
+    let first = feeds.layers[2].markers[0].space_position.unwrap();
+    assert!((feeds.layers[2].markers[0].altitude_km.unwrap() - 10.668).abs() < 1e-9);
+    let request = feeds.requests(NOW + 16., (0., 20.)).pop().unwrap();
+    body["ac"][0]["lon"] = 2.into();
+    body["ac"][0]["alt_geom"] = 36000.into();
+    feeds.complete(request.id, Ok(&body.to_string()), NOW + 16.);
+    let marker = &feeds.layers[2].markers[0];
+    assert_eq!(marker.space_trail, vec![Some(first)]);
+    assert!(marker.space_position.unwrap().length() > first.length());
+    body["ac"][0]["alt_geom"] = Value::Null;
+    body["ac"][0]["alt_baro"] = "ground".into();
+    let (markers, _, _) = parse::snapshot(Kind::Aircraft, &body.to_string(), NOW).unwrap();
+    assert_eq!(markers[0].altitude_km, Some(0.));
+    body["ac"][0]["alt_baro"] = Value::Null;
+    let (markers, _, _) = parse::snapshot(Kind::Aircraft, &body.to_string(), NOW).unwrap();
+    assert_eq!(markers[0].altitude_km, None);
+    assert!(markers[0].space_position.is_none());
+}
+
+#[test]
+fn hazard_height_is_optional_and_quake_depth_is_not_altitude() {
+    let body = r#"{"events":[{"id":"h","title":"Plume","geometry":[{"type":"Point","date":"2026-09-07T00:00:00Z","coordinates":[10,20,6000]}]}]}"#;
+    let (markers, _, _) = parse::snapshot(Kind::Hazards, body, NOW).unwrap();
+    assert_eq!(markers[0].altitude_km, Some(6.));
+    assert!(markers[0].space_position.unwrap().length() > 1.);
+    let (markers, _, _) = parse::snapshot(Kind::Quakes, &quake(10.), NOW).unwrap();
+    assert!(markers[0].space_position.is_none());
+    assert_eq!(markers[0].altitude_km, None);
+}
+
+#[test]
+fn satellites_beyond_the_limb_are_selectable_at_their_orbital_position() {
+    use crate::map::{globe::lonlat_to_vec3, GlobeViewport, Projection};
+    let mut feeds = Feeds::default();
+    load(&mut feeds, "t", OMM, NOW);
+    let globe = Projection::Globe(GlobeViewport::new(0., 0., 80., 200, 200));
+    let marker = &mut feeds.layers[3].markers[0];
+    marker.lon = 95.;
+    marker.lat = 0.;
+    marker.space_position = Some(lonlat_to_vec3(95., 0.) * 1.07);
+    assert!(globe.project_point(marker.lon, marker.lat).is_none());
+    let (x, y) = marker.project(&globe).unwrap();
+    feeds.select(&globe, (x / 2 + 1) as u16, (y / 4 + 1) as u16);
+    assert!(feeds.selected.is_some());
+    feeds.layers[3].markers[0].space_position = Some(lonlat_to_vec3(180., 0.) * 1.07);
+    feeds.select(&globe, 51, 26);
+    assert!(feeds.selected.is_none());
 }
 #[test]
 fn selection_culls_back_of_globe_and_disabled_layers() {

@@ -81,7 +81,22 @@ pub struct Marker {
     pub observed: f64,
     pub magnitude: f64,
     pub heading: Option<f64>,
+    pub altitude_km: Option<f64>,
     pub trail: Vec<(f64, f64)>,
+    #[serde(skip)]
+    pub space_position: Option<glam::DVec3>,
+    #[serde(skip)]
+    pub space_trail: Vec<Option<glam::DVec3>>,
+}
+
+impl Marker {
+    /// Labels, symbols and hit testing must share the same elevated position.
+    pub fn project(&self, projection: &crate::map::Projection) -> Option<(i32, i32)> {
+        match (projection, self.space_position) {
+            (crate::map::Projection::Globe(globe), Some(point)) => globe.project_elevated(point),
+            _ => projection.project_point(self.lon, self.lat),
+        }
+    }
 }
 
 pub struct Orbit {
@@ -268,6 +283,11 @@ impl Feeds {
                         if let Some(previous) =
                             old.get(m.id.as_str()).filter(|p| now - p.observed < 120.)
                         {
+                            m.space_trail = previous.space_trail.clone();
+                            m.space_trail.push(previous.space_position);
+                            if m.space_trail.len() > 8 {
+                                m.space_trail.remove(0);
+                            }
                             m.trail = previous.trail.clone();
                             m.trail.push((previous.lon, previous.lat));
                             if m.trail.len() > 8 {
@@ -319,6 +339,12 @@ impl Feeds {
                             .map(|(x, y, _)| (x, y))
                     })
                     .collect();
+                let space_position = parse::orbital_position(orbit, self.now, self.now)?;
+                let space_trail = (-15..=15)
+                    .map(|i| {
+                        parse::orbital_position(orbit, self.now + f64::from(i) * 120., self.now)
+                    })
+                    .collect();
                 Some(Marker {
                     id: orbit.elements.norad_id.to_string(),
                     label: orbit
@@ -339,7 +365,10 @@ impl Feeds {
                     observed: epoch,
                     magnitude: 0.,
                     heading: None,
+                    altitude_km: Some(alt),
                     trail,
+                    space_position: Some(space_position),
+                    space_trail,
                 })
             })
             .collect();
@@ -364,7 +393,7 @@ impl Feeds {
                 continue;
             }
             for m in &layer.markers {
-                if let Some((x, y)) = projection.project_point(m.lon, m.lat) {
+                if let Some((x, y)) = m.project(projection) {
                     if x < 0 || y < 0 {
                         continue;
                     }

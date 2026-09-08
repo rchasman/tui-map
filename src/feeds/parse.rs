@@ -93,6 +93,7 @@ fn link(v: &Value) -> String {
     }
 }
 fn marker(kind: Kind, v: &Value, now: f64) -> Option<Marker> {
+    let mut altitude_km = None;
     let (id, label, lon, lat, detail, url, observed, magnitude, heading) = match kind {
         Kind::Quakes => {
             if v["geometry"]["type"] != "Point" {
@@ -131,6 +132,9 @@ fn marker(kind: Kind, v: &Value, now: f64) -> Option<Marker> {
                 return None;
             }
             let (lon, lat) = coords(&geometry.1["coordinates"])?;
+            // GeoJSON optional third ordinate is height in metres, not quake depth.
+            altitude_km =
+                number(&geometry.1["coordinates"][2]).map(|metres| (metres / 1000.0).max(0.0));
             (
                 text(&v["id"]),
                 text(&v["title"]),
@@ -160,15 +164,13 @@ fn marker(kind: Kind, v: &Value, now: f64) -> Option<Marker> {
             } else {
                 flight
             };
-            let altitude = number(&v["alt_baro"])
-                .map(|x| format!("{x:.0} ft"))
-                .unwrap_or_else(|| {
-                    if v["alt_baro"] == "ground" {
-                        "ground".into()
-                    } else {
-                        "altitude unknown".into()
-                    }
-                });
+            let altitude = if v["alt_baro"] == "ground" {
+                "ground".into()
+            } else {
+                number(&v["alt_geom"]).map(|x| format!("{x:.0} ft geometric"))
+                    .or_else(|| number(&v["alt_baro"]).map(|x| format!("{x:.0} ft barometric")))
+                    .unwrap_or_else(|| "altitude unknown".into())
+            };
             let speed = number(&v["gs"])
                 .map(|x| format!("{x:.0} kt"))
                 .unwrap_or_else(|| "speed unknown".into());
@@ -193,6 +195,24 @@ fn marker(kind: Kind, v: &Value, now: f64) -> Option<Marker> {
     if id.is_empty() {
         return None;
     }
+    altitude_km = if kind == Kind::Aircraft {
+        if v["alt_baro"] == "ground" {
+            Some(0.0)
+        } else {
+            number(&v["alt_geom"])
+                .or_else(|| number(&v["alt_baro"]))
+                .map(|feet| (feet * 0.0003048).max(0.0))
+        }
+    } else {
+        altitude_km
+    };
+    let detail = if kind == Kind::Hazards {
+        altitude_km
+            .map(|alt| format!("{detail} | altitude {alt:.2} km"))
+            .unwrap_or(detail)
+    } else {
+        detail
+    };
     Some(Marker {
         id,
         label,
@@ -203,7 +223,11 @@ fn marker(kind: Kind, v: &Value, now: f64) -> Option<Marker> {
         observed,
         magnitude,
         heading,
+        altitude_km,
         trail: vec![],
+        space_position: altitude_km
+            .map(|alt| crate::map::globe::lonlat_to_vec3(lon, lat) * (1.0 + alt / 6371.0)),
+        space_trail: vec![],
     })
 }
 
@@ -237,4 +261,26 @@ pub(super) fn position(orbit: &Orbit, seconds: f64) -> Option<(f64, f64, f64)> {
         z.abs() - 6356.752314
     };
     (altitude >= 0.).then_some((lon, lat.to_degrees(), altitude))
+}
+
+/// SGP4 TEME kilometres in the globe's Earth-fixed frame, retaining radius.
+/// A whole orbit uses the current Earth's rotation, rather than joining future
+/// ground tracks that each used a differently rotated Earth.
+pub(super) fn orbital_position(
+    orbit: &Orbit,
+    seconds: f64,
+    earth_seconds: f64,
+) -> Option<glam::DVec3> {
+    let datetime = sgp4::chrono::DateTime::from_timestamp(seconds as i64, 0)?.naive_utc();
+    let earth_time = sgp4::chrono::DateTime::from_timestamp(earth_seconds as i64, 0)?.naive_utc();
+    let minutes = orbit
+        .elements
+        .datetime_to_minutes_since_epoch(&datetime)
+        .ok()?;
+    let prediction = orbit.constants.propagate(minutes).ok()?;
+    let [x, y, z] = prediction.position;
+    let theta = sgp4::afspc_epoch_to_sidereal_time(sgp4::julian_years_since_j2000(&earth_time));
+    let (sin, cos) = theta.sin_cos();
+    let point = glam::DVec3::new(x * cos + y * sin, y * cos - x * sin, z) / 6371.0;
+    (point.is_finite() && point.length() > 1.0).then_some(point)
 }
