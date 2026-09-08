@@ -128,8 +128,18 @@ impl BrowserApp {
             }
             return;
         }
-        if row >= ui::map_rows(&self.app, self.width, map_height) {
+        let navigation_row = ui::map_rows(&self.app, self.width, map_height);
+        if row >= navigation_row {
             self.app.mouse_pos = None;
+            if kind == "start" {
+                self.map_drag = false;
+                self.app.end_drag();
+            }
+            if kind == "fire" && row == navigation_row {
+                if let Some(key) = ui::navigation_hit(&self.app, col) {
+                    self.command(key);
+                }
+            }
             return;
         }
         if kind == "start" {

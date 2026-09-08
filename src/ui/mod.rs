@@ -564,13 +564,34 @@ impl<'a> Widget for MapWidget<'a> {
     }
 }
 
-fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
+fn navigation_controls(app: &App) -> [(&'static str, &'static str); 4] {
+    [
+        ("g", if app.is_globe() { "[G]lobe " } else { "[M]ap " }),
+        ("-", "[-] "),
+        ("+", "[+] "),
+        ("r", "[r Reset] "),
+    ]
+}
 
-    let status = Line::from(vec![
-        Span::styled(
-            if app.is_globe() { "[G]lobe " } else { "[M]ap " },
-            Style::default().fg(if app.is_globe() { Color::Magenta } else { Color::Cyan }),
-        ),
+pub fn navigation_hit(app: &App, col: u16) -> Option<&'static str> {
+    let mut start = 0;
+    for (key, label) in navigation_controls(app) {
+        let end = start + label.len() as u16;
+        if col >= start && col < end - 1 {
+            return Some(key);
+        }
+        start = end;
+    }
+    None
+}
+
+fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
+    let mut spans: Vec<_> = navigation_controls(app).into_iter().map(|(key, label)| {
+        Span::styled(label, Style::default().fg(if key == "g" && app.is_globe() {
+            Color::Magenta
+        } else { Color::Cyan }))
+    }).collect();
+    spans.extend([
         Span::styled("Zoom: ", Style::default().fg(Color::DarkGray)),
         Span::styled(app.zoom_level(), Style::default().fg(Color::Yellow)),
         Span::styled(" (", Style::default().fg(Color::DarkGray)),
@@ -593,7 +614,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         },
     ]);
 
-    let paragraph = Paragraph::new(status);
+    let paragraph = Paragraph::new(Line::from(spans));
     frame.render_widget(paragraph, area);
 }
 

@@ -180,3 +180,48 @@ test('TUI layer picker preserves the header, stacks toggles and consumes map inp
     } finally {app.free();}
   }
 });
+
+
+test('compact controls keep navigation clickable and Help after effects', () => {
+  for (const width of [40, 55, 120, 240]) {
+    const height = 44, app = new BrowserApp(width, height);
+    const lines = () => {
+      const cells = app.render();
+      return Array.from({ length: height }, (_, row) => Array.from({ length: width },
+        (_, col) => String.fromCodePoint(cells[(row * width + col) * 3])).join(''));
+    };
+    const click = label => {
+      const rendered = lines(), row = rendered.findIndex(line => line.includes(label));
+      assert.ok(row >= 0, `Missing control: ${label}`);
+      const col = rendered[row].indexOf(label);
+      app.pointer('start', col, row);
+      app.pointer('end', col, row);
+      app.pointer('fire', col, row);
+    };
+    try {
+      const rendered = lines();
+      assert.ok(!rendered.join('').includes('Globe/map'));
+      const navRow = JSON.parse(app.status()).mapAreaRows;
+      assert.match(rendered[navRow], /\[G\]lobe \[-\] \[\+\] \[r Reset\]/);
+      if (width >= 120) {
+        assert.match(rendered[height - 2], /\[9 Meteor\] \[\? Help\]/);
+        assert.match(rendered[height - 3], /Effects/);
+      }
+      const zoom = JSON.parse(app.status()).zoom;
+      click('[+]');
+      assert.notEqual(JSON.parse(app.status()).zoom, zoom);
+      click('[-]');
+      assert.equal(JSON.parse(app.status()).zoom, zoom);
+      click('[G]lobe');
+      assert.equal(JSON.parse(app.status()).projection, 'Mercator');
+      click('[M]ap');
+      assert.equal(JSON.parse(app.status()).projection, 'Globe');
+      click('[1 Water]');
+      click('[r Reset]');
+      assert.equal(JSON.parse(app.status()).weapon, 'CROSSHAIR');
+      assert.equal(JSON.parse(app.status()).effects, 0);
+      click('[? Help]');
+      assert.equal(JSON.parse(app.status()).help, true);
+    } finally { app.free(); }
+  }
+});

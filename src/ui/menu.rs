@@ -19,15 +19,8 @@ const GROUPS: &[&[(&str, &str)]] = &[
         ("7", "7 Tornado"),
         ("8", "8 Frost"),
         ("9", "9 Meteor"),
-    ],
-    &[
-        ("g", "g Globe/map"),
-        ("-", "-"),
-        ("+", "+"),
-        ("r", "r Reset"),
         ("?", "? Help"),
     ],
-
 ];
 
 pub struct Item {
@@ -71,7 +64,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect, help: bool) {
     frame.render_widget(
         Block::default()
             .borders(Borders::ALL)
-            .title(" Effects · Navigation ")
+            .title(" Effects ")
             .border_style(Style::default().fg(Color::DarkGray)),
         area,
     );
@@ -226,7 +219,7 @@ mod tests {
     fn all_controls_fit_and_hit_their_own_cells() {
         for width in [40, 55, 120, 240] {
             let (height, items) = layout(width);
-            assert_eq!(items.len(), 15);
+            assert_eq!(items.len(), 11);
             for item in items {
                 assert!(item.area.right() < width);
                 assert!(item.area.bottom() < height);
