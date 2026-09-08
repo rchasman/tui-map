@@ -5,6 +5,7 @@ pub mod water;
 pub mod life;
 pub mod chem;
 pub mod gas_clouds;
+mod accents;
 
 use crate::app::WeaponType;
 use crate::map::GlobeViewport;
@@ -61,6 +62,7 @@ pub fn weapon_color(weapon: WeaponType) -> Color {
 
 /// Dispatch explosion rendering to the appropriate weapon renderer
 pub fn render_explosion(exp: &ExplosionRender, x: u16, y: u16, area: Rect, global_frame: u64, buf: &mut Buffer, globe: Option<&GlobeViewport>) {
+    accents::render(exp, x, y, area, buf, globe, false);
     match exp.weapon_type {
         WeaponType::Nuke => nuke::render(exp, x, y, area, global_frame, buf, globe),
         WeaponType::Bio => bio::render(exp, x, y, area, global_frame, buf, globe),
@@ -69,6 +71,7 @@ pub fn render_explosion(exp: &ExplosionRender, x: u16, y: u16, area: Rect, globa
         WeaponType::Life => life::render(exp, x, y, area, global_frame, buf, globe),
         WeaponType::Chem => chem::render(exp, x, y, area, global_frame, buf, globe),
     }
+    accents::render(exp, x, y, area, buf, globe, true);
 }
 
 /// Fast acos approximation for dot products.
