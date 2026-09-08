@@ -197,7 +197,7 @@ pub fn render_layers(frame: &mut Frame, app: &App, width: u16, height: u16, open
             .take(area.height.saturating_sub(1) as usize).enumerate() {
             let count = if (4..8).contains(&i) {
                 let layer = &app.feeds.layers[i - 4];
-                format!(" · {}", if layer.visible(app.feeds.now) { layer.markers.len() } else { 0 })
+                format!(" · {}", layer.status_label(app.feeds.now))
             } else { String::new() };
             frame.render_widget(Paragraph::new(format!(" • {name}{count}"))
                 .style(Style::default().fg(layer_color(i))),
@@ -209,7 +209,7 @@ pub fn render_layers(frame: &mut Frame, app: &App, width: u16, height: u16, open
     for (i, ((key, name), on)) in LAYERS.iter().zip(states).enumerate().skip(offset as usize).take(rows as usize) {
         let suffix = if (4..8).contains(&i) && on {
             let layer = &app.feeds.layers[i - 4];
-            format!(" · {} {}", if layer.visible(app.feeds.now) { layer.markers.len() } else { 0 }, layer.state(app.feeds.now))
+            format!(" · {}", layer.status_label(app.feeds.now))
         } else { String::new() };
         let row = Rect::new(area.x, area.y + 1 + i as u16 - offset, area.width, 1);
         frame.render_widget(Paragraph::new(format!(" [{mark}] {key} {name}{suffix}", mark=if on { "x" } else { " " }))

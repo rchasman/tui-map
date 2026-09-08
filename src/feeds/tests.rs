@@ -35,6 +35,25 @@ fn malformed_refresh_preserves_last_good_snapshot_until_expiry() {
     assert_eq!(f.layers[0].state(NOW + 86401.), "EXPIRED");
 }
 #[test]
+fn loading_is_shown_until_requests_complete() {
+    let mut f = Feeds::default();
+    f.command("d");
+    assert_eq!(f.layers[1].status_label(NOW), "LOADING");
+    let request = f.requests(NOW, (0., 0.)).pop().unwrap();
+    assert_eq!(f.layers[1].status_label(NOW), "LOADING");
+    f.complete(request.id, Ok(r#"{"events":[]}"#), NOW);
+    assert_eq!(f.layers[1].status_label(NOW), "0 EMPTY");
+
+    let request = f.requests(NOW + 900., (0., 0.)).pop().unwrap();
+    assert_eq!(f.layers[1].status_label(NOW + 900.), "LOADING");
+    f.complete(request.id, Err("HTTP 503".into()), NOW + 900.);
+    assert_eq!(f.layers[1].state(NOW + 900.), "STALE");
+    f.requests(NOW + 1800., (0., 0.));
+    assert_eq!(f.layers[1].status_label(NOW + 1800.), "LOADING");
+    f.command("d");
+    assert_eq!(f.layers[1].state(NOW + 1800.), "OFF");
+}
+#[test]
 fn valid_empty_and_offline_are_distinct() {
     let mut f = Feeds::default();
     load(&mut f, "d", r#"{"events":[]}"#, NOW);

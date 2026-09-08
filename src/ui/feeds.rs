@@ -319,11 +319,6 @@ fn render_active_layers(frame: &mut Frame, app: &App, area: Rect) {
         .take(area.height as usize)
         .enumerate()
     {
-        let count = if layer.visible(feeds.now) {
-            layer.markers.len()
-        } else {
-            0
-        };
         let source = match layer.kind {
             Kind::Quakes => "USGS",
             Kind::Hazards => "EONET",
@@ -332,9 +327,9 @@ fn render_active_layers(frame: &mut Frame, app: &App, area: Rect) {
         };
         frame.render_widget(
             Paragraph::new(format!(
-                "{} · {source} · {count} {}",
+                "{} · {source} · {}",
                 layer.kind.label(),
-                layer.state(feeds.now)
+                layer.status_label(feeds.now)
             ))
             .style(Style::default().fg(color(layer.kind))),
             Rect::new(area.x, area.y + row as u16, area.width.min(48), 1),

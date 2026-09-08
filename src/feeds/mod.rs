@@ -142,6 +142,8 @@ impl Layer {
     pub fn state(&self, now: f64) -> &'static str {
         if !self.enabled {
             "OFF"
+        } else if self.pending.is_some() {
+            "LOADING"
         } else if self.updated.is_some_and(|t| now - t > self.kind.lifetime()) {
             "EXPIRED"
         } else if self.error.is_some() {
@@ -151,11 +153,7 @@ impl Layer {
                 "OFFLINE"
             }
         } else if self.updated.is_none() {
-            if self.pending.is_some() {
-                "LOADING"
-            } else {
-                "WAITING"
-            }
+            "LOADING"
         } else if now - self.updated.unwrap() > self.kind.interval() * 2. {
             "STALE"
         } else if self.rejected > 0 {
@@ -166,6 +164,19 @@ impl Layer {
             "ESTIMATED"
         } else {
             "LIVE"
+        }
+    }
+    pub fn status_label(&self, now: f64) -> String {
+        let state = self.state(now);
+        if state == "LOADING" {
+            state.into()
+        } else {
+            let count = if self.visible(now) {
+                self.markers.len()
+            } else {
+                0
+            };
+            format!("{count} {state}")
         }
     }
 }
