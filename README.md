@@ -2,6 +2,42 @@
 
 High-performance terminal map visualization using Braille Unicode characters.
 
+## Browser app
+
+Play at **https://tui-map.vercel.app** (personal Vercel workspace).
+
+The browser runs the shared Rust simulation as WebAssembly in a Web Worker.
+A canvas paints the Ratatui cell buffer at up to 30 FPS. Drag to rotate or pan,
+scroll or use the zoom buttons, and click to release any of the six effects.
+The toolbar provides layers, projection switching, pause, reset, and keyboard help.
+
+Requires Node.js 20+, Rust, and wasm-pack:
+
+```bash
+rustup target add wasm32-unknown-unknown
+cargo install wasm-pack --locked
+npm run build:web
+npm run test:web
+npm run dev:web
+```
+
+Open `http://localhost:4173`. Rebuild after changing Rust or browser sources.
+The static bundle is generated in `web/dist`; no application server is required.
+Natural Earth coastlines and cities load first, followed by higher-resolution
+coastlines, land, borders, states, and US counties. The build compacts local
+Natural Earth assets when available and otherwise downloads version 5.1.2.
+Optional local GADM datasets are not included in the browser bundle.
+
+Deploy to the **personal** Vercel workspace with an explicit scope:
+
+```bash
+vercel link --cwd web/dist --yes --project tui-map --scope roey-chasmans-projects
+vercel deploy --cwd web/dist --prod --yes --scope roey-chasmans-projects
+```
+
+Only deploy `web/dist`. Its `.vercelignore` excludes environment files and the
+local project link. Generated bundles and account settings are not committed.
+
 ## Build
 
 Requires Rust 1.88 or newer.

@@ -6,6 +6,9 @@
     "dev": "cargo run",
     "start": "cargo run --release",
     "test": "cargo test",
-    "clean": "cargo clean"
+    "clean": "cargo clean",
+    "build:web": "wasm-pack build --target web --out-dir web/pkg --release && node web/build.mjs",
+    "dev:web": "python3 -m http.server 4173 --directory web/dist",
+    "test:web": "node --test web/smoke.test.mjs"
   }
 }

@@ -19,3 +19,8 @@ node_modules/
 
 # Large data files (download separately)
 data/*.json
+
+# Generated browser bundle and deployment link
+/web/pkg/
+/web/dist/
+.vercel/
