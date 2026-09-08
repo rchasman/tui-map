@@ -112,6 +112,37 @@ impl GlobeViewport {
         Some((px, py))
     }
 
+    /// Project a world-space point above the unit sphere, with solid-Earth occlusion.
+    /// Negative camera depth is still visible beyond the limb if the ray misses Earth.
+    pub fn project_elevated(&self, point: DVec3) -> Option<(i32, i32)> {
+        let sx = point.dot(self.right);
+        let sy = point.dot(self.up);
+        let depth = point.dot(self.forward);
+        let disk = sx*sx + sy*sy;
+        if disk < 1.0 && depth + 1e-9 < (1.0-disk).sqrt() { return None; }
+        Some(((self.half_w+sx*self.radius).floor() as i32,
+              (self.half_h-sy*self.radius).floor() as i32))
+    }
+
+    /// Conservative rejection for a world-space bounding sphere around a volume.
+    pub fn volume_may_be_visible(&self, center: DVec3, bound: f64) -> bool {
+        let sx=center.dot(self.right);
+        let sy=center.dot(self.up);
+        if center.dot(self.forward)+bound<0.0 && sx.hypot(sy)+bound<1.0 { return false; }
+        let px=self.half_w+sx*self.radius;
+        let py=self.half_h-sy*self.radius;
+        let reach=bound*self.radius;
+        px+reach>=0.0 && py+reach>=0.0 && px-reach<self.width as f64 && py-reach<self.height as f64
+    }
+
+    /// Depth-test a projected volume sample against Earth's front surface.
+    pub fn elevated_sample_visible(&self, point: DVec3, px: i32, py: i32) -> bool {
+        let sx = (px as f64 + 0.5 - self.half_w) / self.radius;
+        let sy = (self.half_h - py as f64 - 0.5) / self.radius;
+        let disk = sx*sx + sy*sy;
+        disk >= 1.0 || point.dot(self.forward) + 1e-6 >= (1.0-disk).sqrt()
+    }
+
     /// Unproject screen pixels back to lon/lat.
     /// Returns `None` if the point is outside the sphere disk.
     pub fn unproject(&self, px: i32, py: i32) -> Option<(f64, f64)> {
@@ -520,5 +551,22 @@ mod viewport_fit_tests {
         globe.zoom_out();
         assert!((globe.effective_zoom() - 1.0).abs() < 1e-10);
         assert!(globe.radius * 2.0 <= 100.0);
+    }
+}
+
+#[cfg(test)]
+mod elevated_tests {
+    use super::*;
+    #[test]
+    fn raised_tops_survive_the_horizon_but_not_the_far_side() {
+        let globe = GlobeViewport::new(0.0, 0.0, 100.0, 240, 240);
+        let base = lonlat_to_vec3(100.0, 0.0);
+        assert!(globe.project(100.0, 0.0).is_none());
+        assert!(globe.project_elevated(base).is_none());
+        assert!(globe.project_elevated(base*1.15).is_some());
+        assert!(globe.project_elevated(lonlat_to_vec3(180.0,0.0)*1.15).is_none());
+        let front = lonlat_to_vec3(20.0,15.0);
+        assert!(globe.project_elevated(front*1.1).is_some());
+        assert!(globe.project_elevated(front*0.95).is_none());
     }
 }
