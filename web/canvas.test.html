@@ -1,0 +1,58 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Terminal canvas regression tests</title>
+<pre id="result">Running pixel comparisons…</pre>
+<script type="module">
+import { createCellPainter } from './canvas.mjs';
+
+const glyphs = ['☢', '▓', '▒', '░', '⣿', '★', '♣', '≋', '✕', ' '];
+let comparisons = 0;
+try {
+  for (const [cw, ch, dpr] of [[8,16,1], [7,14,1], [7,14,1.25], [8,16,1.25], [7,14,1.5], [8,16,2]]) {
+    const cols = 8, rows = 6;
+    const make = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(cols*cw*dpr);
+      canvas.height = Math.round(rows*ch*dpr);
+      // Keep both reference and incremental draws on the same raster backend.
+      const ctx = canvas.getContext('2d', { alpha:false, willReadFrequently:true });
+      ctx.font = `${ch-2}px monospace`;
+      ctx.textBaseline = 'alphabetic';
+      return {
+        paint: createCellPainter(ctx, {cols,rows,cw,ch,dpr}),
+        pixels: () => ctx.getImageData(0,0,canvas.width,canvas.height).data,
+      };
+    };
+    const incremental = make();
+    for (let frame=0; frame<glyphs.length*3; frame++) {
+      const cells = new Uint32Array(cols*rows*3);
+      for (let i=0; i<cells.length; i+=3) {
+        cells[i] = 32;
+        cells[i+2] = 0x080e16;
+      }
+      // Exercise stationary replacements, moving glyphs, adjacent cells, and
+      // completely empty frames after shaded blocks have been displayed.
+      const moving = frame >= glyphs.length;
+      const index = (moving ? frame % (cols*rows) : 2*cols+3)*3;
+      cells[index] = glyphs[frame % glyphs.length].codePointAt(0);
+      cells[index+1] = frame % 2 ? 0xffffff : 0x50e090;
+      incremental.paint(cells);
+      const fresh = make();
+      fresh.paint(cells);
+      const actual = incremental.pixels(), expected = fresh.pixels();
+      for (let i=0; i<actual.length; i++) {
+        if (actual[i] !== expected[i]) {
+          throw Error(`Stale/different pixel: ${cw}×${ch}, DPR ${dpr}, frame ${frame}, byte ${i}`);
+        }
+      }
+      comparisons++;
+    }
+  }
+  document.querySelector('#result').textContent = `PASS: ${comparisons} incremental frames match fresh renders pixel for pixel.`;
+  document.documentElement.dataset.result = 'passed';
+} catch (error) {
+  document.querySelector('#result').textContent = `FAIL: ${error.message}`;
+  document.documentElement.dataset.result = 'failed';
+  throw error;
+}
+</script>

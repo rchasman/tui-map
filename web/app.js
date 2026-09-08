@@ -1,10 +1,12 @@
+import {createCellPainter} from './canvas.mjs';
 const canvas=document.querySelector('#world'),stage=document.querySelector('#stage');
 const ctx=canvas.getContext('2d',{alpha:false});
 const loading=document.querySelector('#loading');
 const worker=new Worker(new URL('./worker.js',import.meta.url),{type:'module'});
-let cols=0,rows=0,cw=8,ch=16,dpr=1,previous=null,ready=false,inFlight=false;
+let cols=0,rows=0,cw=8,ch=16,dpr=1,ready=false,inFlight=false;
 let gesture=null,lastPointer=null,pointerMove=null;
 let lastRequest=0;
+let paint=()=>{};
 
 function send(message){worker.postMessage(message);}
 function resize(){
@@ -20,28 +22,10 @@ function resize(){
   canvas.style.left=`${(bounds.width-width*fit)/2}px`;canvas.style.top=`${(bounds.height-height*fit)/2}px`;
   ctx.setTransform(dpr,0,0,dpr,0,0);ctx.font=`${ch-2}px monospace`;
   ctx.textBaseline='alphabetic';ctx.fillStyle='#080e16';ctx.fillRect(0,0,width,height);
-  previous=null;
+  paint=createCellPainter(ctx,{cols,rows,cw,ch,dpr});
   if(ready)send({type:'resize',cols,rows});
 }
 
-const colors=new Map();
-function color(rgb){let css=colors.get(rgb);if(!css){css=`#${rgb.toString(16).padStart(6,'0')}`;if(colors.size>4096)colors.clear();colors.set(rgb,css);}return css;}
-function paint(cells){
-  if(cells.length!==cols*rows*3){previous=null;return;}
-  for(let i=0;i<cells.length;i+=3){
-    if(previous&&cells[i]===previous[i]&&cells[i+1]===previous[i+1]&&cells[i+2]===previous[i+2])continue;
-    const index=i/3,x=(index%cols)*cw,y=Math.floor(index/cols)*ch,code=cells[i];
-    ctx.fillStyle=color(cells[i+2]);ctx.fillRect(x,y,cw,ch);
-    if(code===32||code===0x2800)continue;
-    ctx.fillStyle=color(cells[i+1]);
-    if(code>=0x2800&&code<=0x28ff){
-      const bits=code-0x2800,offsets=[[0,0],[0,1],[0,2],[1,0],[1,1],[1,2],[0,3],[1,3]];
-      for(let bit=0;bit<8;bit++)if(bits&(1<<bit)){const [dx,dy]=offsets[bit];ctx.fillRect(x+cw*(dx*.5+.18),y+ch*(dy*.25+.08),Math.max(1,cw*.16),Math.max(1,ch*.085));}
-    }else if(code===0x2588){ctx.fillRect(x,y,cw,ch);}
-    else{ctx.fillText(String.fromCodePoint(code),x,y+ch*.80,cw);}
-  }
-  previous=cells;
-}
 
 function updateStatus(next){
   canvas.dataset.feeds=JSON.stringify(next.feeds);
