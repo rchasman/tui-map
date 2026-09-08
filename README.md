@@ -47,7 +47,9 @@ Try all six combinations in the interactive lab:
 cargo run --release --example effect_lab
 ```
 
-Use `1`–`6` to switch scenes, `Space` to pause, `r` to restart, and `q` to quit.
+Use `1`–`6` for combinations or `7` for the standalone nuke, `Space` to pause,
+`r` to restart, and `q` to quit. The nuke grows from a brief white-hot flash into
+a rounded mushroom cap, then cools into rolling smoke over 90 animation frames.
 To export an animated preview with a timeline and scene selector:
 
 ```bash

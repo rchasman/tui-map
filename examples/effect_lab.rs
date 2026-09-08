@@ -15,13 +15,14 @@ use tui_map::{
     ui::weapons::{composite::Compositor, gas_clouds, ExplosionRender, GasCloudRender},
 };
 
-const LABELS: [&str; 6] = [
+const LABELS: [&str; 7] = [
     "Water + fire / steam",
     "EMP + gas / ionization",
     "Water + life / bloom",
     "Fire + life / char",
     "Bio + chem / mixed wisps",
     "Shockwave + cloud / displacement",
+    "Nuke / fireball to mushroom cloud",
 ];
 
 struct Scene {
@@ -91,6 +92,7 @@ impl Scene {
             (2, 20) => Some((WeaponType::Life, 2.0)),
             (3, 10) => Some((WeaponType::Life, 0.0)),
             (5, 10) => Some((WeaponType::Nuke, -4.0)),
+            (6, 10) => Some((WeaponType::Nuke, 0.0)),
             _ => None,
         };
         if let Some((weapon_type, lon)) = launch {
@@ -115,7 +117,7 @@ impl Scene {
     fn draw(&mut self, area: Rect, buf: &mut Buffer) {
         let projection = Projection::Mercator(Viewport::new(
             0.0,
-            0.0,
+            if matches!(self.kind, 5 | 6) { 5.0 } else { 0.0 },
             10.0,
             area.width as usize * 2,
             area.height as usize * 4,
@@ -209,11 +211,11 @@ fn export(path: &str) -> anyhow::Result<()> {
     let mut file = std::fs::File::create(path)?;
     file.write_all(br#"<!doctype html><meta charset="utf-8"><title>Effect interaction lab</title>
 <style>body{background:#080e19;color:#c8d7e8;font:15px system-ui;margin:32px}h1{font-size:24px}button{background:#172438;color:#c8d7e8;border:1px solid #30425c;border-radius:6px;padding:10px;margin:0 8px 8px 0;cursor:pointer}button[aria-pressed=true]{border-color:#80d8ff;color:#80d8ff}pre{font:14px/1.1 'Menlo','DejaVu Sans Mono',monospace;white-space:pre;margin:20px 0;overflow:auto}input{width:480px;max-width:70vw}small{color:#8b9cb3}</style>
-<h1>Effect interaction lab</h1><p>Six combinations rendered by the terminal effect engine.</p><nav id="tabs"></nav><pre id="screen"></pre>
+<h1>Effect interaction lab</h1><p>Six combinations and a standalone nuke, rendered by the terminal effect engine.</p><nav id="tabs"></nav><pre id="screen"></pre>
 <button id="play">Pause</button><input id="time" type="range" min="0" max="59" value="0" aria-label="Animation frame"><small id="stamp"></small>
 <p><small>Water consumes fire at contact; steam and pollen linger. Shockwaves displace fog temporarily. Light blends at crossings.</small></p><script>const labels="#)?;
     write!(file, "{:?};const scenes=[", LABELS)?;
-    for kind in 0..6 {
+    for kind in 0..LABELS.len() {
         if kind > 0 {
             write!(file, ",")?;
         }
@@ -258,7 +260,7 @@ fn main() -> anyhow::Result<()> {
             terminal.draw(|frame| {
                 let area = frame.area();
                 let block = Block::default().borders(Borders::ALL).title(format!(
-                    " {} | 1–6: scene · Space: pause · R: restart · Q: quit ",
+                    " {} | 1–7: scene · Space: pause · R: restart · Q: quit ",
                     LABELS[scene.kind]
                 ));
                 let inner = block.inner(area);
@@ -271,7 +273,7 @@ fn main() -> anyhow::Result<()> {
                         KeyCode::Char('q') | KeyCode::Esc => break,
                         KeyCode::Char(' ') => paused = !paused,
                         KeyCode::Char('r') => scene = Scene::new(scene.kind),
-                        KeyCode::Char(c @ '1'..='6') => {
+                        KeyCode::Char(c @ '1'..='7') => {
                             scene = Scene::new(c as usize - '1' as usize)
                         }
                         _ => {}
