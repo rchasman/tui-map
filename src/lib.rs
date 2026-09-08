@@ -2,6 +2,7 @@ pub mod app;
 pub mod braille;
 pub mod data;
 pub mod geo;
+pub mod feeds;
 pub mod hash;
 pub mod interactions;
 pub mod map;
