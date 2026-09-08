@@ -13,7 +13,15 @@
 </head>
 <body>
   <main id="stage" aria-label="Terminal map application">
-    <canvas id="world" tabindex="0" aria-label="Interactive terminal globe. Drag to rotate, scroll to zoom, click to release an effect. Click the terminal controls or press 1 to 6 to select effects, G to switch projection, Escape to pause, R to reset, and ? for help."></canvas>
+    <canvas id="world" tabindex="0" aria-label="Interactive terminal globe. Drag to rotate, scroll to zoom, click to select a marker or use a selected effect. Click labels to inspect. Press 1 to 9 to select effects, G to switch projection, Escape to return to the crosshair, R to reset, and ? for help."></canvas>
+    <aside id="inspector" aria-labelledby="inspector-title" hidden>
+      <header><h2 id="inspector-title"></h2><button id="inspector-close" type="button" aria-label="Close details">×</button></header>
+      <div class="inspector-body">
+        <p id="inspector-source"></p><p id="inspector-detail"></p>
+        <dl><dt>Coordinates</dt><dd id="inspector-coordinates"></dd><dt>Observed</dt><dd id="inspector-time"></dd></dl>
+      </div>
+      <a id="inspector-link" target="_blank" rel="noopener noreferrer" aria-label="Open source in a new tab"></a>
+    </aside>
     <p id="loading" role="status">Loading map…</p>
     <p id="error" role="alert" hidden></p>
   </main>

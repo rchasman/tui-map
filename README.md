@@ -85,8 +85,9 @@ All feeds start off and require no API keys. The default crosshair selects marke
 clicking does not release an effect until you choose one with `1`–`9`. Press `Esc` (or `i`)
 to return to crosshair selection. Browser clicks and Space select markers;
 terminal left/right clicks and Space do the same. Reset returns to the crosshair
-while preserving feed settings, snapshots and polling deadlines. Feed status and
-selected marker details appear below the map, never over the globe. The existing
+while preserving feed settings, snapshots and polling deadlines. Feed status remains below the map.
+Selected marker details appear in a compact square at the top right in the browser,
+with a source link that opens in a new tab. Terminal details remain below the map. The existing
 `L` Labels control covers cities and all four live layers, with labels on by
 default. Crowded labels are placed around their markers without overlapping
 other labels; zoom in to reveal more. Clicking a label also selects its marker.

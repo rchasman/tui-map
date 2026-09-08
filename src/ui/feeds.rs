@@ -231,7 +231,14 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
 /// Information lives in a dedicated footer, never over geographic cells.
 pub fn height(app: &App, width: u16) -> u16 {
     let count = app.feeds.layers.iter().filter(|l| l.enabled).count() as u16;
-    count.div_ceil((width / 24).max(1)) + if app.feeds.selected.is_some() { 2 } else { 0 }
+    let details = if cfg!(target_arch = "wasm32") {
+        0
+    } else if app.feeds.selected.is_some() {
+        2
+    } else {
+        0
+    };
+    count.div_ceil((width / 24).max(1)) + details
 }
 pub fn render_info(frame: &mut Frame, app: &App, area: Rect) {
     if area.is_empty() {
@@ -240,6 +247,7 @@ pub fn render_info(frame: &mut Frame, app: &App, area: Rect) {
     let feeds = &app.feeds;
     let columns = (area.width / 24).max(1);
     let enabled: Vec<_> = feeds.layers.iter().filter(|l| l.enabled).collect();
+    #[cfg(not(target_arch = "wasm32"))]
     let summary_rows = (enabled.len() as u16).div_ceil(columns);
     let cell_width = area.width / columns;
     for (i, l) in enabled.iter().enumerate() {
@@ -269,39 +277,42 @@ pub fn render_info(frame: &mut Frame, app: &App, area: Rect) {
             ),
         );
     }
-    let selected = feeds.selected.as_ref().and_then(|(k, id)| {
-        let layer = &feeds.layers[k.index()];
-        layer
-            .visible(feeds.now)
-            .then(|| {
-                layer
-                    .markers
-                    .iter()
-                    .find(|m| &m.id == id)
-                    .map(|m| (layer, m))
-            })
-            .flatten()
-    });
-    if let Some((layer, m)) = selected {
-        let time = sgp4::chrono::DateTime::from_timestamp(m.observed as i64, 0)
-            .map(|d| d.format("%Y-%m-%d %H:%M UTC").to_string())
-            .unwrap_or_default();
-        let lines = [
-            format!(
-                "{} · {} · {:.3}, {:.3} · {time}",
-                m.label,
-                layer.kind.source(),
-                m.lat,
-                m.lon
-            ),
-            format!("{} · {}", m.detail, m.url),
-        ];
-        for (i, line) in lines.into_iter().enumerate() {
-            if i as u16 + summary_rows < area.height {
-                frame.render_widget(
-                    Paragraph::new(line).style(Style::default().fg(Color::White)),
-                    Rect::new(area.x, area.y + summary_rows + i as u16, area.width, 1),
-                );
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let selected = feeds.selected.as_ref().and_then(|(k, id)| {
+            let layer = &feeds.layers[k.index()];
+            layer
+                .visible(feeds.now)
+                .then(|| {
+                    layer
+                        .markers
+                        .iter()
+                        .find(|m| &m.id == id)
+                        .map(|m| (layer, m))
+                })
+                .flatten()
+        });
+        if let Some((layer, m)) = selected {
+            let time = sgp4::chrono::DateTime::from_timestamp(m.observed as i64, 0)
+                .map(|d| d.format("%Y-%m-%d %H:%M UTC").to_string())
+                .unwrap_or_default();
+            let lines = [
+                format!(
+                    "{} · {} · {:.3}, {:.3} · {time}",
+                    m.label,
+                    layer.kind.source(),
+                    m.lat,
+                    m.lon
+                ),
+                format!("{} · {}", m.detail, m.url),
+            ];
+            for (i, line) in lines.into_iter().enumerate() {
+                if i as u16 + summary_rows < area.height {
+                    frame.render_widget(
+                        Paragraph::new(line).style(Style::default().fg(Color::White)),
+                        Rect::new(area.x, area.y + summary_rows + i as u16, area.width, 1),
+                    );
+                }
             }
         }
     }

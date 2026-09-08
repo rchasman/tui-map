@@ -271,7 +271,15 @@ impl BrowserApp {
     }
 
     pub fn status(&self) -> String {
-        serde_json::json!({"feeds":self.app.feeds.status(),"inspect":self.app.feeds.inspect,"selected":self.app.feeds.selected,"weapon":if self.app.feeds.inspect {"CROSSHAIR"} else {self.app.active_weapon.label()},
+        let details = self.app.feeds.selected.as_ref().and_then(|(kind,id)| {
+            let layer = &self.app.feeds.layers[kind.index()];
+            if !layer.visible(self.app.feeds.now) { return None; }
+            layer.markers.iter().find(|m| &m.id == id).map(|m| serde_json::json!({
+                "label":m.label,"source":kind.source(),"detail":m.detail,"url":m.url,
+                "lat":m.lat,"lon":m.lon,"observed":m.observed,"state":layer.state(self.app.feeds.now)
+            }))
+        });
+        serde_json::json!({"details":details,"feeds":self.app.feeds.status(),"inspect":self.app.feeds.inspect,"selected":self.app.feeds.selected,"weapon":if self.app.feeds.inspect {"CROSSHAIR"} else {self.app.active_weapon.label()},
             "projection":if matches!(self.app.projection,Projection::Globe(_)){"Globe"}else{"Mercator"},
             "zoom":self.app.zoom_level(),"center":self.app.center_coords(),
             "fires":self.app.fires.len(),"effects":self.app.explosions.len(),

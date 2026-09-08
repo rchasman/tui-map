@@ -133,8 +133,10 @@ test('crosshair is default, every live layer shares Labels, and details stay out
     app.command('L');
     const index=text().indexOf('QUAKE LABEL');app.pointer('fire',index%160,Math.floor(index/160));
     assert.deepEqual(JSON.parse(app.status()).selected,['quakes','quake-label']);
-    const rendered=text(),end=JSON.parse(app.status()).mapAreaRows*160;
-    assert.ok(rendered.indexOf('Magnitude 4.5')>=end);
+    const rendered=text();
+    assert.ok(!rendered.includes('Magnitude 4.5'));
+    assert.match(JSON.parse(app.status()).details.detail,/Magnitude 4.5/);
+    assert.equal(JSON.parse(app.status()).details.label,'M4.5 QUAKE LABEL');
     assert.equal(JSON.parse(app.status()).effects,0);
     app.command('1');assert.equal(JSON.parse(app.status()).inspect,false);
     app.command('Escape');assert.equal(JSON.parse(app.status()).weapon,'CROSSHAIR');

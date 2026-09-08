@@ -1,3 +1,4 @@
+import {createInspector} from './inspector.mjs';
 import {createCellPainter} from './canvas.mjs';
 const canvas=document.querySelector('#world'),stage=document.querySelector('#stage');
 const ctx=canvas.getContext('2d',{alpha:false});
@@ -7,6 +8,7 @@ let cols=0,rows=0,cw=8,ch=16,dpr=1,ready=false,inFlight=false;
 let gesture=null,lastPointer=null,pointerMove=null;
 let lastRequest=0;
 let paint=()=>{};
+const updateInspector=createInspector(document.querySelector('#inspector'),()=>{command('Escape');canvas.focus({preventScroll:true});});
 
 function send(message){worker.postMessage(message);}
 function resize(){
@@ -28,6 +30,7 @@ function resize(){
 
 
 function updateStatus(next){
+  updateInspector(next.details);
   canvas.dataset.feeds=JSON.stringify(next.feeds);
   canvas.dataset.inspect=String(next.inspect);
   canvas.style.cursor=next.inspect ? 'crosshair' : 'pointer';
@@ -84,6 +87,7 @@ canvas.addEventListener('wheel',event=>{event.preventDefault();if(performance.no
 function command(key){if(ready)send({type:'command',key});}
 document.addEventListener('keydown',event=>{
   if(event.ctrlKey||event.metaKey||event.altKey)return;
+  if(event.key!=='Escape' && event.target.closest?.('a,button,input,textarea,select'))return;
   if(['1','2','3','4','5','6','7','8','9','e','d','a','t','i','g','b','s','c','y','L','p','h','j','k','l','r','0',' ','+','=','-','ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Escape','?'].includes(event.key)){
     event.preventDefault();command(event.key);
   }
