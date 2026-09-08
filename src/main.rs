@@ -1,10 +1,4 @@
-mod app;
-mod braille;
-mod data;
-mod geo;
-mod hash;
-mod map;
-mod ui;
+use tui_map::{app, data, ui};
 
 use anyhow::Result;
 use app::{App, WeaponType};
