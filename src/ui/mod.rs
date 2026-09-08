@@ -79,7 +79,12 @@ fn render_map(frame: &mut Frame, app: &mut App, area: Rect) {
     // Convert explosions to screen coordinates with aggressive culling
     let mut explosions: Vec<ExplosionRender> = Vec::with_capacity(50);
     let is_globe = matches!(projection, Projection::Globe(_));
-    for exp in &app.explosions {
+    for original in &app.explosions {
+        let mut moving = original.clone();
+        if moving.weapon_type == WeaponType::Tornado {
+            (moving.lon, moving.lat) = crate::motion::tornado_position(original.lon, original.lat, original.radius_km, original.seed, original.frame as u16);
+        }
+        let exp = &moving;
         // Elevated volumes may remain visible after their surface anchor sets.
         if matches!(projection, Projection::Globe(_))
             && weapons::volume::is_raised(exp.weapon_type) {

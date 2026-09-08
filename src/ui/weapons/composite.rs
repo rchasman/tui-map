@@ -285,6 +285,7 @@ impl Compositor {
             );
             }
             if matches!(exp.weapon_type, WeaponType::Nuke | WeaponType::Chem | WeaponType::Meteor)
+                && (exp.weapon_type != WeaponType::Meteor || exp.frame >= crate::motion::meteor_impact_frame(exp.seed))
                 && world.fields.iter().any(|f| matches!(f.weapon, WeaponType::Water | WeaponType::Frost))
             {
                 // The thermal body also yields where water has already arrived.

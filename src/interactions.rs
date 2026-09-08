@@ -18,6 +18,8 @@ pub struct Field {
     pub weapon: WeaponType,
     pub age: u16,
     center: DVec3,
+    origin: (f64, f64),
+    pub seed: u64,
 }
 
 impl Field {
@@ -29,11 +31,18 @@ impl Field {
             weapon: exp.weapon_type,
             age: exp.frame as u16,
             center: lonlat_to_vec3(exp.lon, exp.lat),
+            origin: (exp.lon, exp.lat),
+            seed: exp.seed,
         }
     }
 
     pub fn progress(&self) -> f64 {
-        self.age as f64 / self.weapon.front_frames() as f64
+        let delay = if self.weapon == WeaponType::Meteor {
+            crate::motion::meteor_impact_frame(self.seed) as u16
+        } else {
+            0
+        };
+        self.age.saturating_sub(delay) as f64 / self.weapon.front_frames() as f64
     }
 
     pub fn front_km(&self) -> f64 {
@@ -41,7 +50,18 @@ impl Field {
     }
 
     pub fn contains(&self, point: DVec3) -> bool {
-        self.age > 0 && self.center.dot(point) >= (self.front_km() / EARTH_KM).cos()
+        if self.weapon == WeaponType::Water {
+            return crate::motion::water_flow(
+                self.lon,
+                self.lat,
+                self.radius_km,
+                self.seed,
+                self.age,
+                point,
+            )
+            .is_some();
+        }
+        self.progress() > 0.0 && self.center.dot(point) >= (self.front_km() / EARTH_KM).cos()
     }
 
     pub fn distance(&self, point: DVec3) -> f64 {
@@ -107,6 +127,16 @@ impl Interactions {
     pub fn update(&mut self, fires: &mut Vec<Fire>) -> bool {
         for field in &mut self.fields {
             field.age += 1;
+            if field.weapon == WeaponType::Tornado {
+                (field.lon, field.lat) = crate::motion::tornado_position(
+                    field.origin.0,
+                    field.origin.1,
+                    field.radius_km,
+                    field.seed,
+                    field.age,
+                );
+                field.center = lonlat_to_vec3(field.lon, field.lat);
+            }
         }
         self.fields.retain(|f| f.age < f.lifetime());
         self.reactions.retain(|_, r| {
@@ -133,20 +163,39 @@ impl Interactions {
         if reaches.is_empty() {
             return changed;
         }
+        // Prepare directional sheet geometry once, not for every burning cell.
+        let wet_fields: Vec<_> = reaches
+            .iter()
+            .filter(|(f, _)| matches!(f.weapon, WeaponType::Water | WeaponType::Frost))
+            .map(|(f, _)| {
+                (
+                    *f,
+                    if f.weapon == WeaponType::Water {
+                        crate::motion::WaterSheet::new(f.lon, f.lat, f.radius_km, f.seed, f.age)
+                    } else {
+                        None
+                    },
+                )
+            })
+            .collect();
+        let wet_contains = |f: &Field, sheet: &Option<crate::motion::WaterSheet>, point| {
+            if let Some(sheet) = sheet {
+                sheet.sample(point).is_some()
+            } else {
+                f.contains(point)
+            }
+        };
         for fire in fires.iter_mut() {
             let point = lonlat_to_vec3(fire.lon, fire.lat);
             // Choose reactions from a snapshot: water always takes precedence over
             // growth, regardless of field insertion order.
-            let wet = reaches
+            let wet = wet_fields
                 .iter()
-                .filter(|(f, reach)| {
-                    matches!(f.weapon, WeaponType::Water | WeaponType::Frost)
-                        && f.center.dot(point) >= *reach
-                })
+                .filter(|(f, sheet)| wet_contains(f, sheet, point))
                 .max_by(|a, b| a.0.radius_km.total_cmp(&b.0.radius_km));
             let life = reaches
                 .iter()
-                .any(|(f, reach)| f.weapon == WeaponType::Life && f.center.dot(point) >= *reach);
+                .any(|(f, _)| f.weapon == WeaponType::Life && f.contains(point));
             if let Some((field, _)) = wet {
                 emit(
                     &mut self.reactions,
@@ -202,10 +251,9 @@ impl Interactions {
                     );
                     let point = lonlat_to_vec3(lon, lat);
                     if life.center.dot(point) >= *reach
-                        && reaches.iter().any(|(f, reach)| {
-                            matches!(f.weapon, WeaponType::Water | WeaponType::Frost)
-                                && f.center.dot(point) >= *reach
-                        })
+                        && wet_fields
+                            .iter()
+                            .any(|(f, sheet)| wet_contains(f, sheet, point))
                     {
                         emit(
                             &mut self.reactions,
@@ -402,7 +450,8 @@ mod tests {
     use super::*;
 
     fn pulse(weapon: WeaponType, age: u8) -> Explosion {
-        Explosion { seed: 0,
+        Explosion {
+            seed: 0,
             lon: 179.0,
             lat: 0.0,
             radius_km: 300.0,
@@ -423,11 +472,15 @@ mod tests {
     #[test]
     fn water_reaches_contact_before_consuming_heat_across_date_line() {
         let mut world = Interactions::default();
-        world.launch(&pulse(WeaponType::Water, 0));
+        let mut incoming = pulse(WeaponType::Water, 0);
+        incoming.seed = (0..1000)
+            .find(|&seed| crate::motion::variation(seed, 30) < 0.02)
+            .unwrap();
+        world.launch(&incoming);
         let mut fires = vec![fire(-179.0, 240), fire(160.0, 240)];
         assert!(!world.update(&mut fires));
         assert_eq!(fires.len(), 2);
-        for _ in 0..20 {
+        for _ in 0..45 {
             world.update(&mut fires);
         }
         assert_eq!(fires.len(), 1);
@@ -563,7 +616,8 @@ mod tests {
 
     #[test]
     fn polar_destination_preserves_geographic_radius() {
-        let field = Field::new(&Explosion { seed: 0,
+        let field = Field::new(&Explosion {
+            seed: 0,
             lon: 179.0,
             lat: 88.0,
             radius_km: 500.0,

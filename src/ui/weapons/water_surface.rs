@@ -12,10 +12,7 @@ use ratatui::{buffer::Buffer, layout::Rect, style::Color};
 const FIXED: f64 = 1_000_000.0;
 
 struct Source {
-    center: DVec3,
-    radius: f64,
-    front: f64,
-    cutoff: f64,
+    sheet: crate::motion::WaterSheet,
     age: f64,
     fade: f64,
 }
@@ -29,37 +26,35 @@ impl Source {
         {
             return None;
         }
-        let front = field.front_km();
         let tail = ((180.0 - field.age as f64) / 70.0).clamp(0.0, 1.0);
         Some(Self {
-            center: lonlat_to_vec3(field.lon, field.lat),
-            radius: field.radius_km,
-            front,
-            cutoff: (front / 6371.0).cos(),
+            sheet: crate::motion::WaterSheet::new(
+                field.lon,
+                field.lat,
+                field.radius_km,
+                field.seed,
+                field.age,
+            )?,
             age: field.age as f64,
             fade: tail * tail * (field.age as f64 / 5.0).min(1.0),
         })
     }
 
     fn sample(&self, point: DVec3) -> Option<Sample> {
-        let dot = self.center.dot(point).clamp(-1.0, 1.0);
-        if dot < self.cutoff {
-            return None;
-        }
-        let distance = dot.acos() * 6371.0;
-        let r = distance / self.radius;
-        let behind = (self.front - distance) / self.radius;
-        // A soft advancing edge; interiors combine by union, not added opacity.
-        let coverage = (behind / 0.14).clamp(0.0, 1.0);
-        let envelope = self.fade * coverage / (1.0 + r * 0.65);
-        // Two wavelengths travel at different speeds: long swells with finer
-        // capillary ripples. All impacts share phase at birth.
-        let phase = r * 17.0 - self.age * 0.25;
-        let fine = r * 29.0 - self.age * 0.38;
+        let flow = self.sheet.sample(point)?;
+        let coverage = flow.coverage;
+        let envelope = self.fade * coverage * (0.7 + 0.3 * (-flow.edge / 1.2).exp());
+        // Curved advancing crests stretch across the incoming sheet. The slower
+        // return surge reverses the flow as the water settles behind the breaker.
+        let slosh = (self.age / 14.0).sin() * 0.8;
+        let bend = (flow.across * 3.0 + flow.along * 1.1 - self.age * 0.035).sin() * 0.55;
+        let phase = flow.along * 12.0 - self.age * 0.21 + bend + slosh;
+        let fine = flow.along * 23.0 + flow.across * 2.5 - self.age * 0.35 + bend;
         let height = (phase.sin() + 0.24 * fine.sin()) * envelope;
         let slope = (phase.cos() + 0.41 * fine.cos()) * envelope;
-        let direction = (point * dot - self.center).normalize_or_zero();
-        let rim = (-((behind - 0.055) / 0.045).powi(2)).exp() * self.fade;
+        let direction = (flow.forward - point * flow.forward.dot(point)).normalize_or_zero();
+        let rim =
+            (-((flow.edge - 0.055) / 0.055).powi(2)).exp() * self.fade * (-self.age / 85.0).exp();
         Some(Sample {
             height,
             gradient: direction * slope,
@@ -196,7 +191,8 @@ mod tests {
     };
 
     fn field(lon: f64, age: u8) -> Field {
-        Field::new(&Explosion { seed: 0,
+        Field::new(&Explosion {
+            seed: 0,
             lon,
             lat: 0.0,
             radius_km: 600.0,

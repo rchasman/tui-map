@@ -91,7 +91,7 @@ pub fn render(exp: &ExplosionRender, globe: &GlobeViewport, area: Rect, buf: &mu
         globe,
         area,
     };
-    if !globe.volume_may_be_visible(center, volume.scale * 6.5) {
+    if !globe.volume_may_be_visible(center, volume.scale * 9.0) {
         return;
     }
     if matches!(exp.weapon_type, WeaponType::Tornado | WeaponType::Frost | WeaponType::Meteor) {

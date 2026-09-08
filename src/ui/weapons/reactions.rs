@@ -64,7 +64,7 @@ fn dot(
 
 pub(super) fn wave(field: &Field, projection: &Projection, area: Rect, buf: &mut Buffer) {
     let t = field.progress();
-    if t >= 1.0 {
+    if field.weapon == WeaponType::Tornado || t >= 1.0 {
         return;
     }
     let color = match field.weapon {

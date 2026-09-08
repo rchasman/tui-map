@@ -25,7 +25,7 @@ impl WeaponType {
             WeaponType::Nuke => 90,
             WeaponType::Tornado => 210,
             WeaponType::Frost => 180,
-            WeaponType::Meteor => 100,
+            WeaponType::Meteor => 150,
             _ => 60,
         }
     }
@@ -428,6 +428,12 @@ impl App {
         self.interactions.launch(&explosion);
         self.explosions.push(explosion);
 
+        if weapon != WeaponType::Meteor {
+            self.apply_weapon_effect(lon, lat, radius_km, weapon);
+        }
+    }
+
+    fn apply_weapon_effect(&mut self, lon: f64, lat: f64, radius_km: f64, weapon: WeaponType) {
         // Restorative weapons: heal instead of destroy
         if weapon.is_restorative() {
             match weapon {
@@ -655,11 +661,17 @@ impl App {
             }
         }
 
+        let mut impacts = Vec::new();
         self.explosions.retain_mut(|exp| {
             exp.frame += 1;
+            if exp.weapon_type == WeaponType::Meteor && exp.frame == crate::motion::meteor_impact_frame(exp.seed) {
+                impacts.push((exp.lon, exp.lat, exp.radius_km));
+            }
             exp.frame < exp.weapon_type.max_frames()
         });
 
+        let impacted = !impacts.is_empty();
+        for (lon, lat, radius) in impacts { self.apply_weapon_effect(lon, lat, radius, WeaponType::Meteor); }
         let reacted = self.interactions.update(&mut self.fires);
 
         // Update fires - VERY slow decay and VERY aggressive spreading
@@ -734,7 +746,7 @@ impl App {
 
         // Reactions must reach the damage grid immediately; ordinary spread and
         // decay can keep the five-frame cadence.
-        if reacted || self.frame % 5 == 0 {
+        if impacted || reacted || self.frame % 5 == 0 {
             self.fire_grid.rebuild(&self.fires);
             self.fire_grid_fine.rebuild(&self.fires);
         }
@@ -907,6 +919,28 @@ mod weather_tests {
     use super::*;
 
     #[test]
+    fn meteor_impacts_exactly_once_and_repeated_launches_get_new_variations() {
+        let mut app = App::new(100, 50);
+        app.frame = 30;
+        app.select_weapon(WeaponType::Meteor);
+        app.launch_nuke(50, 24);
+        let seed = app.explosions[0].seed;
+        let impact = crate::motion::meteor_impact_frame(seed);
+        for _ in 1..impact {
+            app.update_explosions();
+            assert!(app.fires.is_empty());
+            assert_eq!(app.interactions.fields[0].progress(), 0.0);
+        }
+        app.update_explosions();
+        assert!(!app.fires.is_empty());
+        app.fires.clear();
+        for _ in 0..10 { app.update_explosions(); }
+        assert!(app.fires.is_empty(), "an impact cannot fire again on later ticks");
+        app.launch_nuke(50, 24);
+        assert_ne!(app.explosions.last().unwrap().seed, seed);
+    }
+
+    #[test]
     fn weather_launches_do_not_inherit_nuclear_side_effects() {
         for weapon in [WeaponType::Tornado, WeaponType::Frost, WeaponType::Meteor] {
             let mut app = App::new(100, 50);
@@ -918,6 +952,13 @@ mod weather_tests {
             assert!(app.fallout.is_empty());
             assert!(app.gas_clouds.is_empty());
             if weapon == WeaponType::Meteor {
+                assert!(app.fires.is_empty());
+                let impact = crate::motion::meteor_impact_frame(app.explosions[0].seed);
+                for _ in 1..impact {
+                    app.update_explosions();
+                    assert!(app.fires.is_empty(), "no fire while the meteor is airborne");
+                }
+                app.update_explosions();
                 assert!(!app.fires.is_empty());
                 assert!(app.fires.iter().all(|f| f.weapon_type == WeaponType::Meteor));
                 let mut cooling = app.explosions[0].clone();
