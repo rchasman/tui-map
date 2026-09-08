@@ -7,9 +7,10 @@ use crossterm::event::{
     MouseEvent, MouseEventKind,
 };
 use crossterm::execute;
+use crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
 use ratatui::DefaultTerminal;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 fn main() -> Result<()> {
     // Initialize terminal
@@ -78,13 +79,21 @@ fn run(terminal: &mut DefaultTerminal) -> Result<()> {
     app.map_renderer.build_land_grid();
     app.map_renderer.build_spatial_indexes();
 
-    // Main loop
+    draw_frame(terminal, &mut app)?;
+    let mut next_frame = Instant::now() + FRAME_INTERVAL;
     loop {
-        // Draw
-        terminal.draw(|frame| ui::render(frame, &mut app))?;
+        let now = Instant::now();
+        if now >= next_frame {
+            // Input frequency must not change the animation rate. Drawing uses
+            // part of this frame's budget rather than adding to a fixed sleep.
+            next_frame = advance_frame_deadline(next_frame, now);
+            app.update_explosions();
+            draw_frame(terminal, &mut app)?;
+        }
 
-        // Handle events with ~60fps target
-        if event::poll(Duration::from_millis(16))? {
+        // Handle queued input until the next frame is due. Even an input flood
+        // returns to the deadline check after each event, so rendering cannot starve.
+        if event::poll(next_frame.saturating_duration_since(Instant::now()))? {
             match event::read()? {
                 Event::Key(key) => {
                     // Only handle key press events (not release)
@@ -168,13 +177,73 @@ fn run(terminal: &mut DefaultTerminal) -> Result<()> {
             }
         }
 
-        // Update explosion animations
-        app.update_explosions();
-
         if app.should_quit {
             break;
         }
     }
 
     Ok(())
+}
+
+// Supporting terminals display each diff atomically instead of painting it
+// partway through transmission. Always close the frame, including on draw errors.
+fn draw_frame(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
+    execute!(terminal.backend_mut(), BeginSynchronizedUpdate)?;
+    let drawn = terminal.draw(|frame| ui::render(frame, app)).map(|_| ());
+    let ended = execute!(terminal.backend_mut(), EndSynchronizedUpdate);
+    drawn?;
+    ended?;
+    Ok(())
+}
+
+const FRAME_INTERVAL: Duration = Duration::from_nanos(1_000_000_000 / 60);
+
+fn advance_frame_deadline(previous: Instant, now: Instant) -> Instant {
+    let next = previous + FRAME_INTERVAL;
+    if next <= now {
+        now + FRAME_INTERVAL
+    } else {
+        next
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn drawing_consumes_the_frame_budget() {
+        let now = Instant::now();
+        let next = advance_frame_deadline(now, now);
+        let draw_time = Duration::from_millis(4);
+        assert_eq!(
+            next.duration_since(now + draw_time),
+            FRAME_INTERVAL - draw_time
+        );
+    }
+
+    #[test]
+    fn delayed_frames_do_not_accumulate_catch_up_draws() {
+        let previous = Instant::now();
+        let now = previous + Duration::from_secs(1);
+        assert_eq!(advance_frame_deadline(previous, now), now + FRAME_INTERVAL);
+    }
+
+    #[test]
+    fn input_frequency_does_not_accelerate_animation() {
+        let start = Instant::now();
+        for event_interval in [Duration::from_micros(100), Duration::from_millis(1)] {
+            let mut now = start;
+            let mut next = start + FRAME_INTERVAL;
+            let mut frames = 0;
+            while now < start + Duration::from_secs(1) {
+                now += event_interval.min(next.saturating_duration_since(now));
+                if now >= next {
+                    frames += 1;
+                    next = advance_frame_deadline(next, now);
+                }
+            }
+            assert_eq!(frames, 60);
+        }
+    }
 }
