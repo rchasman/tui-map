@@ -5,7 +5,7 @@ use crate::map::projection::Viewport;
 /// Globe viewport using orthographic projection of a rotating sphere.
 /// Orientation stored as a rotation matrix (3 column vectors) for
 /// efficient point transformation without quaternion dependency on DQuat.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct GlobeViewport {
     /// Forward direction (what points at the camera)
     forward: DVec3,

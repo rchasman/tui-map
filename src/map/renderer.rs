@@ -243,6 +243,8 @@ struct RenderCacheKey {
     center_lat: i64,
     zoom: i64,        // Quantized to 0.01
     is_globe: bool,
+    // Globe layers must follow every camera change, including sub-pixel motion.
+    globe: Option<GlobeViewport>,
     show_coastlines: bool,
     show_borders: bool,
     show_states: bool,
@@ -251,11 +253,9 @@ struct RenderCacheKey {
 
 impl RenderCacheKey {
     fn new(center_lon: f64, center_lat: f64, zoom: f64, is_globe: bool, width: usize, height: usize, settings: &DisplaySettings) -> Self {
-        // Quantize to screen-pixel precision: sub-pixel viewport changes produce
-        // identical renders, so snapping the cache key to pixel boundaries makes
-        // the cache persist across smooth panning. At world view (zoom=1, w=400),
-        // 1 pixel ≈ 0.9° — vs the old 0.001° precision which invalidated 900×
-        // more often than necessary.
+        // Keep the existing Mercator quantization. Globe rendering additionally
+        // keys on the exact camera basis and radius: sub-pixel rotations can
+        // change rasterized pixels and must not reuse an older orientation.
         let deg_per_pixel = 360.0 / (zoom * width as f64 * 2.0);
         let quant = deg_per_pixel.max(0.001); // floor at old precision for extreme zoom
 
@@ -266,6 +266,7 @@ impl RenderCacheKey {
             center_lat: (center_lat / quant).round() as i64,
             zoom: (zoom * 100.0) as i64,
             is_globe,
+            globe: None,
             show_coastlines: settings.show_coastlines,
             show_borders: settings.show_borders,
             show_states: settings.show_states,
@@ -956,7 +957,8 @@ impl MapRenderer {
         let fg_max_lat = (vp_max_lat + pad).min(90.0);
 
         // Check cache
-        let cache_key = RenderCacheKey::new(globe.center_lon(), globe.center_lat(), globe.effective_zoom(), true, width, height, &self.settings);
+        let mut cache_key = RenderCacheKey::new(0.0, 0.0, 1.0, true, width, height, &self.settings);
+        cache_key.globe = Some(globe.clone());
         let cache_borrow = self.cache.borrow();
         let use_cache = cache_borrow.as_ref().map(|c| c.key == cache_key).unwrap_or(false);
 
@@ -1484,6 +1486,37 @@ fn draw_linestring_on_globe(canvas: &mut BrailleCanvas, line: &LineString, globe
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slow_globe_rotation_matches_fresh_layers() {
+        let mut renderer = MapRenderer::new();
+        crate::data::generate_simple_world(&mut renderer);
+        renderer.build_spatial_indexes();
+        let mut globe = GlobeViewport::new(15.0, 35.0, 140.0, 400, 200);
+        let mut changed_frames = 0;
+        let mut previous = renderer.render(200, 50, &Projection::Globe(globe.clone()));
+        for _ in 0..120 {
+            globe.apply_momentum(0.0005, 0.0);
+            let projection = Projection::Globe(globe.clone());
+            let cached = renderer.render(200, 50, &projection);
+            renderer.invalidate_cache();
+            let fresh = renderer.render(200, 50, &projection);
+            let mut changed = false;
+            for row in 0..50 {
+                changed |= previous.coastlines.row_raw(row) != fresh.coastlines.row_raw(row);
+                assert_eq!(cached.coastlines.row_raw(row), fresh.coastlines.row_raw(row), "stale coastline during slow rotation");
+                assert_eq!(cached.borders.row_raw(row), fresh.borders.row_raw(row));
+                assert_eq!(cached.states.row_raw(row), fresh.states.row_raw(row));
+                assert_eq!(cached.counties.row_raw(row), fresh.counties.row_raw(row));
+                assert_eq!(cached.globe_outline.as_ref().map(|layer| layer.row_raw(row)), fresh.globe_outline.as_ref().map(|layer| layer.row_raw(row)));
+            }
+            changed_frames += usize::from(changed);
+            previous = fresh;
+        }
+        assert!(changed_frames > 0, "exercise rotations that change pixels");
+        let cached = renderer.render(200, 50, &Projection::Globe(globe));
+        assert!(Rc::ptr_eq(&previous.coastlines, &cached.coastlines), "stationary view should still reuse layers");
+    }
 
     #[test]
     fn parallel_layer_merge_matches_sequential_drawing() {
