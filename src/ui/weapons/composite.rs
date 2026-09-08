@@ -267,7 +267,10 @@ impl Compositor {
             _ => None,
         };
         self.begin(buf.area);
+        super::water_surface::render(&world.fields, projection, area, frame, &mut self.scratch);
+        self.collect(area);
         for exp in explosions {
+            if exp.weapon_type == WeaponType::Water { continue; }
             if let Some(g) = globe.filter(|_| super::volume::is_raised(exp.weapon_type)) {
                 super::volume::render(exp, g, area, &mut self.scratch);
             } else {
@@ -312,14 +315,14 @@ impl Compositor {
         self.cells.fill(Contribution::default());
         self.dirty.fill(0);
         for field in &world.fields {
-            if field.progress() >= 1.0 {
+            if field.weapon == WeaponType::Water || field.progress() >= 1.0 {
                 continue;
             }
             reactions::wave(field, projection, area, &mut self.scratch);
             self.collect(area);
         }
         for exp in explosions {
-            if globe.is_some() && super::volume::is_raised(exp.weapon_type) { continue; }
+            if exp.weapon_type == WeaponType::Water || (globe.is_some() && super::volume::is_raised(exp.weapon_type)) { continue; }
             accents::render(
                 exp,
                 area.x + exp.x,

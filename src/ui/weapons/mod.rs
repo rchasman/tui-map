@@ -2,6 +2,7 @@ pub mod nuke;
 pub mod bio;
 pub mod emp;
 pub mod water;
+mod water_surface;
 pub mod life;
 pub mod chem;
 pub mod gas_clouds;
