@@ -13,6 +13,7 @@ anyhow = "1"
 glam = { version = "0.33", default-features = false, features = ["std", "f64"] }
 rayon = "1.11.0"
 simd-json = "0.18"
+foldhash = "0.2"
 
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }
@@ -23,6 +24,10 @@ harness = false
 
 [[bench]]
 name = "spinning"
+harness = false
+
+[[bench]]
+name = "low_level"
 harness = false
 
 [profile.release]

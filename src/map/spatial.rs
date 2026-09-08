@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use foldhash::{HashMap, HashMapExt};
 
 /// Convert geographic coordinates to grid cell indices
 #[inline(always)]
@@ -177,5 +177,30 @@ impl FeatureGrid {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SpatialGrid;
+
+    #[test]
+    fn queries_preserve_cell_order_and_stable_indices() {
+        let mut grid = SpatialGrid::new(10.0);
+        for (lon, lat, name) in [
+            (0.0, 0.0, "center"),
+            (-0.1, -0.1, "negative"),
+            (10.0, 0.0, "edge"),
+            (1.0, 1.0, "same cell"),
+            (20.0, 20.0, "outside"),
+        ] {
+            grid.insert(lon, lat, name);
+        }
+        assert_eq!(grid.query_bbox(-0.1, -0.1, 10.0, 0.0), vec![1, 0, 3, 2]);
+        assert_eq!(grid.query_radius(0.0, 0.0, 1.0), vec![1, 0, 3, 2]);
+        assert_eq!(grid.query_radius(-0.1, -0.1, 0.0), vec![1]);
+        *grid.get_mut(3).unwrap() = "updated";
+        assert_eq!(grid.get(3), Some(&"updated"));
+        assert_eq!(grid.query_bbox(0.0, 0.0, 0.0, 0.0), vec![0, 3]);
     }
 }
