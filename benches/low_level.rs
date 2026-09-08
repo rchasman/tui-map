@@ -158,5 +158,111 @@ fn bench_interactions(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_city_grid, bench_effects, bench_interactions);
+fn bench_clouds(c: &mut Criterion) {
+    use tui_map::ui::weapons::{gas_clouds, GasCloudRender};
+    let mut group = c.benchmark_group("interacting_clouds");
+    group.sample_size(20);
+    for count in [0, 8, 48] {
+        let mut world = Interactions::default();
+        for i in 0..count {
+            world.launch(&tui_map::app::Explosion {
+                lon: (i % 8) as f64 - 4.0,
+                lat: (i / 8) as f64 - 3.0,
+                frame: 15,
+                radius_km: 800.0,
+                weapon_type: WeaponType::Emp,
+            });
+        }
+        for (width, height) in [(100, 30), (200, 50)] {
+            let area = Rect::new(0, 0, width, height);
+            let projection = Projection::Mercator(Viewport::new(
+                0.0,
+                0.0,
+                8.0,
+                width as usize * 2,
+                height as usize * 4,
+            ));
+            let clouds = [
+                GasCloudRender {
+                    lon: 0.0,
+                    lat: 0.0,
+                    radius_km: 3000.0,
+                    intensity: 1800,
+                    weapon_type: WeaponType::Bio,
+                },
+                GasCloudRender {
+                    lon: 1.0,
+                    lat: 1.0,
+                    radius_km: 3000.0,
+                    intensity: 1800,
+                    weapon_type: WeaponType::Chem,
+                },
+            ];
+            let mut buf = Buffer::empty(area);
+            let mut density = vec![(0.0, 0.0); width as usize * height as usize];
+            group.bench_function(format!("{width}x{height}_{count}_fields"), |b| {
+                b.iter(|| {
+                    buf.reset();
+                    gas_clouds::render_interacting(
+                        black_box(&clouds),
+                        &mut density,
+                        area,
+                        15,
+                        &mut buf,
+                        &projection,
+                        &world,
+                    );
+                    black_box((&buf, &density));
+                })
+            });
+        }
+    }
+    group.finish();
+}
+
+fn bench_nuke(c: &mut Criterion) {
+    let mut group = c.benchmark_group("nuke_sampling");
+    group.sample_size(20);
+    let area = Rect::new(0, 0, 100, 50);
+    for radius in [8, 24] {
+        for frame in [5, 30, 60] {
+            let exp = ExplosionRender {
+                x: 50,
+                y: 40,
+                frame,
+                radius,
+                weapon_type: WeaponType::Nuke,
+                lon: 0.0,
+                lat: 0.0,
+                radius_km: 400.0,
+            };
+            let mut buffer = Buffer::empty(area);
+            group.bench_function(format!("radius_{radius}_age_{frame}"), |b| {
+                b.iter(|| {
+                    buffer.reset();
+                    tui_map::ui::weapons::nuke::render(
+                        black_box(&exp),
+                        50,
+                        40,
+                        area,
+                        15,
+                        &mut buffer,
+                        None,
+                    );
+                    black_box(&buffer);
+                })
+            });
+        }
+    }
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_city_grid,
+    bench_effects,
+    bench_interactions,
+    bench_clouds,
+    bench_nuke
+);
 criterion_main!(benches);
